@@ -275,9 +275,12 @@ barcode-ica-shopping-list/
   (remove/check) + options for exposed lists + translations for the added UI +
   tests.
 
-## 13. To confirm during review
+## 13. Decisions resolved during review
 
-1. **Domain name** — `ica` (proposed) vs `ica_shopping`. Easily changed now,
-   costly later. *(no strong objection raised; defaulting to `ica`.)*
-2. Whether phase 2 exposes **only the default list** or **one todo entity per
-   list** (defaulting to: default list first, multi-list as an option).
+1. **Domain name — `ica`.** Chosen for clean names (`ica.scan_barcode`,
+   `todo.ica_<listname>`). Accepted minor risk of colliding with a hypothetical
+   future official `ica` core integration.
+2. **Phase 2 scope — default list only, first.** Expose a single `TodoListEntity`
+   for the configured default list initially; one-entity-per-list remains a
+   possible later enhancement, not part of the planned phases.
+3. **UI languages — English (source) + Swedish.** Item text stays Swedish (data).
