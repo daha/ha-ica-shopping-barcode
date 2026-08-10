@@ -172,8 +172,14 @@ HA-side write for a snappy UI.
 - **Duplicate scans:** merge, no count — dedupe by product name; add once if new.
 - **Device feedback:** services return structured response data
   (`SupportsResponse.OPTIONAL`).
-- **Language:** code, comments, and UI/service descriptions in **English**; shopping
-  list item text kept in **Swedish** (as returned by ICA / raw EAN label).
+- **Language / i18n:** code and comments in **English**. The **UI is fully
+  translatable** via HA's translation system, shipping **English** (`strings.json`
+  + `translations/en.json`, the source of truth) and **Swedish**
+  (`translations/sv.json`). Translations cover config/options/reauth steps, error &
+  abort messages, repair issues, service names/descriptions/fields, and entity
+  names. Shopping-list **item text is data**, kept in **Swedish** as returned by
+  ICA (or the raw-EAN label), independent of the chosen UI language. New languages
+  are added by dropping in another `translations/<lang>.json`.
 
 ## 8. Configuration & options
 
@@ -210,7 +216,10 @@ barcode-ica-shopping-list/
 │       ├── services.py
 │       ├── services.yaml
 │       ├── todo.py                # phase 2
-│       ├── strings.json           # + translations/en.json
+│       ├── strings.json           # English UI source of truth
+│       ├── translations/
+│       │   ├── en.json            # English (mirrors strings.json)
+│       │   └── sv.json            # Swedish
 │       └── api/                   # HA-free ICA client
 │           ├── __init__.py
 │           ├── auth.py
@@ -238,7 +247,8 @@ barcode-ica-shopping-list/
 - **pre-commit** (pre-commit.com) — runs ruff (lint + format), mypy, and
   fast checks on commit; the same checks plus pytest run in CI.
 - **CI (GitHub Actions):** ruff, mypy, pytest, and HA's `hassfest` + HACS
-  validation actions to keep the integration installable/valid.
+  validation actions to keep the integration installable/valid. `hassfest` also
+  validates the translation files (missing keys / malformed JSON).
 
 ## 11. Testing strategy
 
@@ -259,9 +269,11 @@ barcode-ica-shopping-list/
 - This spec covers the **whole architecture** so phase 1 does not box in phase 2.
 - **Implementation plan #1 → Phase 1:** repo/tooling scaffold (uv, ruff, mypy,
   pytest, pre-commit, CI, HACS metadata) + API client (auth + `get_product` +
-  list add/read) + config flow + the three services + tests.
+  list add/read) + config flow + the three services + `strings.json` and
+  `translations/{en,sv}.json` for the phase-1 UI surface + tests.
 - **Implementation plan #2 → Phase 2:** `TodoListEntity` + full list operations
-  (remove/check) + options for exposed lists + tests.
+  (remove/check) + options for exposed lists + translations for the added UI +
+  tests.
 
 ## 13. To confirm during review
 
