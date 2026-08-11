@@ -257,9 +257,12 @@ The HA-free data layer: endpoint constants, the exception hierarchy, and typed m
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - Constants: `IMS_BASE`, `API_BASE`, `TOKEN_ENDPOINT`, `AUTHORIZE_ENDPOINT`, `REGISTER_ENDPOINT`, `LOGIN_ENDPOINT`, `DCR_CLIENT_ID`, `DCR_CLIENT_SECRET`, `DCR_SOFTWARE_ID`, `REDIRECT_URI`, `ACR`, `USER_AGENT`, `SL_PATH`, `PRODUCT_PATH`.
+  - Constants: `IMS_BASE`, `API_BASE`, `TOKEN_ENDPOINT`, `AUTHORIZE_ENDPOINT`, `REGISTER_ENDPOINT`, `LOGIN_ENDPOINT`, `DCR_CLIENT_ID`, `DCR_CLIENT_SECRET`, `DCR_SOFTWARE_ID`, `REDIRECT_URI`, `ACR`, `USER_AGENT`, `SHOPPING_LIST_BASE` (web shopping-list API base), `ARTICLE_SEARCH_URL` (article autocomplete), `PRODUCT_URL` (product-service base).
   - Exceptions: `IcaError`, `IcaAuthError`, `IcaConnectionError`, `IcaGatewayBlockedError`.
-  - Models: `Product(name: str, ean: str | None, article_id: str | None, article_group_id: str | None)` with `from_api(dict) -> Product`; `ShoppingListItem(offline_id: str, product_name: str, is_checked: bool, quantity: float | None, unit: str | None)` with `from_api`; `ShoppingList(offline_id: str, title: str, list_id: int | None, items: list[ShoppingListItem])` with `from_summary(dict)` and `from_api(dict)`.
+  - Models (web dialect):
+    - `Product(name: str, ean: str | None, article_id: int | None, article_group_id: int | None, extended_article_group_id: int | None)` with `from_api(dict) -> Product` (parses product-service keys `name`, `gtin`, `articleId`, `articleGroupId`, `expandedArticleGroupId`); method `to_row_article() -> dict` building the `article` object for an add request.
+    - `ShoppingListItem(id: str, text: str, is_checked: bool, article_group_id: int | None)` with `from_api(dict)` (parses row keys `id`, `text`, `isStriked`, nested `article.group.id`).
+    - `ShoppingList(id: str, name: str, items: list[ShoppingListItem])` with `from_api(dict)` (parses list keys `id`, `name`, `rows`).
 
 - [ ] **Step 1: Create `custom_components/ica/api/const.py`**
 
@@ -288,8 +291,16 @@ USER_AGENT = (
     "AppleWebKit/605.1.15"
 )
 
-SL_PATH = "sverige/digx/mobile/shoppinglistservice/v1/shoppinglists"
-PRODUCT_PATH = "sverige/digx/mobile/productservice/v1/product"
+# Web shopping-list service (ica.se) — the API our account actually uses.
+#   list all:   GET    {SHOPPING_LIST_BASE}/list/all
+#   add row:    POST   {SHOPPING_LIST_BASE}/list/{list_id}/row
+#   update row: PUT    {SHOPPING_LIST_BASE}/row/{row_id}     (Phase 2: check/uncheck; body = full row)
+#   delete row: DELETE {SHOPPING_LIST_BASE}/row/{row_id}     (Phase 2: no body)
+SHOPPING_LIST_BASE = f"{API_BASE}/sverige/digx/shopping-list/v1/api"
+# Article search (autocomplete used before adding) — GET {ARTICLE_SEARCH_URL}?query=<q>
+ARTICLE_SEARCH_URL = f"{API_BASE}/sverige/digx/shoppinglistarticlesearch/v1/search"
+# Product service (EAN/GTIN lookup) — GET {PRODUCT_URL}/{ean}
+PRODUCT_URL = f"{API_BASE}/sverige/digx/mobile/productservice/v1/product"
 ```
 
 - [ ] **Step 2: Create `custom_components/ica/api/exceptions.py`**
@@ -333,59 +344,83 @@ from custom_components.ica.api.models import (
 def test_product_from_api() -> None:
     product = Product.from_api(
         {
-            "gtin": "7311041000000",
-            "name": "ICA Mellanmjölk 1.5%",
-            "articleId": "12345",
-            "articleGroupId": "67",
+            "gtin": "7310865000293",
+            "name": "mjölk",
+            "articleId": 11103,
+            "articleGroupId": 10,
+            "expandedArticleGroupId": 10,
         }
     )
-    assert product.name == "ICA Mellanmjölk 1.5%"
-    assert product.ean == "7311041000000"
-    assert product.article_id == "12345"
-    assert product.article_group_id == "67"
+    assert product.name == "mjölk"
+    assert product.ean == "7310865000293"
+    assert product.article_id == 11103
+    assert product.article_group_id == 10
+    assert product.extended_article_group_id == 10
+
+
+def test_product_to_row_article() -> None:
+    product = Product.from_api(
+        {
+            "gtin": "7310865000293",
+            "name": "mjölk",
+            "articleId": 11103,
+            "articleGroupId": 10,
+            "expandedArticleGroupId": 10,
+        }
+    )
+    article = product.to_row_article()
+    assert article["id"] == 11103
+    assert article["articleGroupId"] == 10
+    assert article["expandedArticleGroupId"] == 10
+    assert article["productEan"] == "7310865000293"
 
 
 def test_shopping_list_item_from_api() -> None:
+    # Row shape as returned by GET .../list/all (names come back null).
     item = ShoppingListItem.from_api(
         {
-            "offlineId": "ABC-123",
-            "productName": "Mjölk",
-            "isStrikedOver": True,
-            "quantity": 2.0,
-            "unit": "st",
+            "id": "9e93e3cc-76c5-43f3-a31f-43e2e1754002",
+            "text": "mjölk",
+            "isStriked": True,
+            "article": {
+                "id": 11103,
+                "name": None,
+                "ean": None,
+                "group": {"id": 10, "name": None},
+                "extendedGroup": {"id": 10, "name": None},
+            },
         }
     )
-    assert item.offline_id == "ABC-123"
-    assert item.product_name == "Mjölk"
+    assert item.id == "9e93e3cc-76c5-43f3-a31f-43e2e1754002"
+    assert item.text == "mjölk"
     assert item.is_checked is True
-    assert item.quantity == 2.0
-    assert item.unit == "st"
+    assert item.article_group_id == 10
 
 
-def test_shopping_list_from_summary() -> None:
-    lst = ShoppingList.from_summary(
-        {"id": 42, "offlineId": "LIST-GUID", "title": "Inköpslista"}
+def test_shopping_list_item_from_api_free_text() -> None:
+    # A free-text row may still carry a server-assigned article/group.
+    item = ShoppingListItem.from_api(
+        {"id": "R1", "text": "Ketchup Heinz", "isStriked": False, "article": None}
     )
-    assert lst.list_id == 42
-    assert lst.offline_id == "LIST-GUID"
-    assert lst.title == "Inköpslista"
-    assert lst.items == []
+    assert item.text == "Ketchup Heinz"
+    assert item.is_checked is False
+    assert item.article_group_id is None
 
 
 def test_shopping_list_from_api_with_rows() -> None:
     lst = ShoppingList.from_api(
         {
-            "id": 42,
-            "offlineId": "LIST-GUID",
-            "title": "Inköpslista",
+            "id": "e47ebb35-e5a9-42f2-9e37-8348dceecca4",
+            "name": "Att handla",
             "rows": [
-                {"offlineId": "R1", "productName": "Mjölk", "isStrikedOver": False},
-                {"offlineId": "R2", "productName": "Bröd", "isStrikedOver": True},
+                {"id": "R1", "text": "banan", "isStriked": False},
+                {"id": "R2", "text": "mjölk", "isStriked": True},
             ],
         }
     )
-    assert lst.title == "Inköpslista"
-    assert [i.product_name for i in lst.items] == ["Mjölk", "Bröd"]
+    assert lst.id == "e47ebb35-e5a9-42f2-9e37-8348dceecca4"
+    assert lst.name == "Att handla"
+    assert [i.text for i in lst.items] == ["banan", "mjölk"]
     assert lst.items[1].is_checked is True
 ```
 
@@ -397,7 +432,7 @@ Expected: FAIL — `ModuleNotFoundError: custom_components.ica.api.models`.
 - [ ] **Step 5: Create `custom_components/ica/api/models.py`**
 
 ```python
-"""Typed models for ICA API responses (no Home Assistant imports)."""
+"""Typed models for the ICA web shopping-list API (no Home Assistant imports)."""
 
 from __future__ import annotations
 
@@ -407,70 +442,75 @@ from typing import Any
 
 @dataclass(slots=True)
 class Product:
-    """A product returned by the ICA product service."""
+    """A product returned by the ICA product service (EAN lookup)."""
 
     name: str
     ean: str | None
-    article_id: str | None
-    article_group_id: str | None
+    article_id: int | None
+    article_group_id: int | None
+    extended_article_group_id: int | None
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Product":
+        # `expandedArticleGroupId` falls back to `articleGroupId` when absent.
+        group = data.get("articleGroupId")
         return cls(
             name=data["name"],
             ean=data.get("gtin"),
             article_id=data.get("articleId"),
-            article_group_id=data.get("articleGroupId"),
+            article_group_id=group,
+            extended_article_group_id=data.get("expandedArticleGroupId", group),
         )
+
+    def to_row_article(self) -> dict[str, Any]:
+        """Build the `article` object for an add-row request.
+
+        Carries the group ids so ICA files the row in the correct category.
+        """
+        return {
+            "id": self.article_id,
+            "name": self.name,
+            "productEan": self.ean,
+            "articleGroupId": self.article_group_id,
+            "expandedArticleGroupId": self.extended_article_group_id,
+        }
 
 
 @dataclass(slots=True)
 class ShoppingListItem:
-    """A single row on an ICA shopping list."""
+    """A single row on an ICA shopping list (web dialect)."""
 
-    offline_id: str
-    product_name: str
+    id: str  # row GUID
+    text: str
     is_checked: bool
-    quantity: float | None = None
-    unit: str | None = None
+    article_group_id: int | None = None
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ShoppingListItem":
+        article = data.get("article") or {}
+        group = article.get("group") or {}
         return cls(
-            offline_id=data["offlineId"],
-            product_name=data["productName"],
-            is_checked=bool(data.get("isStrikedOver", False)),
-            quantity=data.get("quantity"),
-            unit=data.get("unit"),
+            id=data["id"],
+            text=data["text"],
+            is_checked=bool(data.get("isStriked", False)),
+            article_group_id=group.get("id"),
         )
 
 
 @dataclass(slots=True)
 class ShoppingList:
-    """An ICA shopping list, optionally with its rows."""
+    """An ICA shopping list with its rows (web dialect)."""
 
-    offline_id: str
-    title: str
-    list_id: int | None = None
+    id: str  # list GUID
+    name: str
     items: list[ShoppingListItem] = field(default_factory=list)
 
     @classmethod
-    def from_summary(cls, data: dict[str, Any]) -> "ShoppingList":
-        """Parse a list summary (from GET /shoppinglists) without rows."""
-        return cls(
-            offline_id=data["offlineId"],
-            title=data.get("title", ""),
-            list_id=data.get("id"),
-        )
-
-    @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ShoppingList":
-        """Parse a full list (from GET /shoppinglists/{offlineId}) with rows."""
         rows = data.get("rows") or []
         return cls(
-            offline_id=data["offlineId"],
-            title=data.get("title", ""),
-            list_id=data.get("id"),
+            id=data["id"],
+            name=data.get("name", ""),
             items=[ShoppingListItem.from_api(row) for row in rows],
         )
 ```
@@ -911,7 +951,9 @@ git commit -m "feat(api): add ICA OAuth/DCR/PKCE auth and token refresh"
 
 ### Task 4: API client (`api/client.py`)
 
-Product lookup and shopping-list operations, layered on `IcaAuth`. Handles bearer injection, a single 401 retry (refresh + retry once), and 403 → `IcaGatewayBlockedError`.
+Product lookup and **web** shopping-list operations, layered on `IcaAuth`. Handles bearer injection, a single 401 retry (refresh + retry once), and 403 → `IcaGatewayBlockedError`.
+
+> **Phase 1 scope:** only `get_product`, `search_articles`, `get_lists`, `get_list`, `add_item`. `remove_item` (`DELETE .../row/{id}`) and `set_checked` (`PUT .../row/{id}` with the full row) belong to the Phase 2 to-do entity — their endpoints are captured in the appendix, but do NOT implement them here.
 
 **Files:**
 - Create: `custom_components/ica/api/client.py`
@@ -919,14 +961,13 @@ Product lookup and shopping-list operations, layered on `IcaAuth`. Handles beare
 - Test: `tests/api/test_client.py`
 
 **Interfaces:**
-- Consumes: `IcaAuth.async_get_access_token()`; `const.API_BASE`, `PRODUCT_PATH`, `SL_PATH`, `USER_AGENT`; models; exceptions.
+- Consumes: `IcaAuth.async_get_access_token()`, `IcaAuth.token`; `const.SHOPPING_LIST_BASE`, `PRODUCT_URL`, `ARTICLE_SEARCH_URL`, `USER_AGENT`; models (`Product`, `ShoppingList`, `ShoppingListItem`); exceptions.
 - Produces `IcaClient(session: aiohttp.ClientSession, auth: IcaAuth)`:
-  - `async get_product(ean: str) -> Product | None` (None on 404)
-  - `async get_lists() -> list[ShoppingList]`
-  - `async get_list(offline_id: str) -> ShoppingList`
-  - `async add_item(offline_id: str, product_name: str) -> None`
-  - `async remove_item(offline_id: str, row_offline_id: str) -> None`
-  - `async set_checked(offline_id: str, row_offline_id: str, product_name: str, checked: bool) -> None`
+  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404.
+  - `async search_articles(query: str) -> list[dict[str, Any]]` — `GET {ARTICLE_SEARCH_URL}?query=<q>`; returns the raw catalog-article dicts (each carries `articleGroupId`/`expandedArticleGroupId`). Defensively unwraps a bare array or a `{hits|articles|data|result: [...]}` envelope. *(Exact envelope pending the search response capture — see note.)*
+  - `async get_lists() -> list[ShoppingList]` — `GET {SHOPPING_LIST_BASE}/list/all` (bare JSON array).
+  - `async get_list(list_id: str) -> ShoppingList` — convenience: `get_lists()` filtered by `id`; raises `IcaError` if not found.
+  - `async add_item(list_id: str, text: str, article: dict[str, Any] | None = None) -> ShoppingListItem` — `POST {SHOPPING_LIST_BASE}/list/{list_id}/row`, body `{"isStriked": False, "quantity": {}, "text": text, "article"?: article}`; `article` is the raw dict from `search_articles` (or `Product.to_row_article()` as a fallback), passed through verbatim; returns the created row.
 
 - [ ] **Step 1: Write the failing test — `tests/api/test_client.py`**
 
@@ -935,12 +976,12 @@ Product lookup and shopping-list operations, layered on `IcaAuth`. Handles beare
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import aiohttp
 import pytest
-from aioresponses import aioresponses
+from aioresponses import CallbackResult, aioresponses
 
 from custom_components.ica.api import const as c
 from custom_components.ica.api.auth import IcaAuth, IcaToken
@@ -968,79 +1009,136 @@ async def test_get_product_found() -> None:
         client = _make_client(session)
         with aioresponses() as mock:
             mock.get(
-                f"{c.API_BASE}/{c.PRODUCT_PATH}/7311041000000",
-                payload={"gtin": "7311041000000", "name": "Mjölk", "articleId": "1"},
+                f"{c.PRODUCT_URL}/7310865000293",
+                payload={
+                    "gtin": "7310865000293",
+                    "name": "mjölk",
+                    "articleId": 11103,
+                    "articleGroupId": 10,
+                    "expandedArticleGroupId": 10,
+                },
             )
-            product = await client.get_product("7311041000000")
+            product = await client.get_product("7310865000293")
     assert product is not None
-    assert product.name == "Mjölk"
+    assert product.name == "mjölk"
+    assert product.article_group_id == 10
 
 
 async def test_get_product_not_found_returns_none() -> None:
     async with aiohttp.ClientSession() as session:
         client = _make_client(session)
         with aioresponses() as mock:
-            mock.get(f"{c.API_BASE}/{c.PRODUCT_PATH}/000", status=404)
+            mock.get(f"{c.PRODUCT_URL}/000", status=404)
             product = await client.get_product("000")
     assert product is None
 
 
-async def test_get_lists() -> None:
+async def test_search_articles_unwraps_envelope() -> None:
+    # Accept either a bare array or a {hits|articles|data|result: [...]} envelope.
     async with aiohttp.ClientSession() as session:
         client = _make_client(session)
         with aioresponses() as mock:
             mock.get(
-                f"{c.API_BASE}/{c.SL_PATH}",
-                payload={
-                    "shoppingLists": [
-                        {"id": 1, "offlineId": "G1", "title": "Inköpslista"},
-                        {"id": 2, "offlineId": "G2", "title": "Fest"},
-                    ]
-                },
+                f"{c.ARTICLE_SEARCH_URL}?query=mj%C3%B6lk",
+                payload=[{"id": 11103, "name": "mjölk", "articleGroupId": 10}],
+            )
+            hits = await client.search_articles("mjölk")
+    assert hits[0]["articleGroupId"] == 10
+
+
+async def test_get_lists() -> None:
+    # GET .../list/all returns a bare JSON array of lists.
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(
+                f"{c.SHOPPING_LIST_BASE}/list/all",
+                payload=[
+                    {
+                        "id": "G1",
+                        "name": "Att handla",
+                        "rows": [{"id": "R1", "text": "banan", "isStriked": False}],
+                    },
+                    {"id": "G2", "name": "Fest", "rows": []},
+                ],
             )
             lists = await client.get_lists()
-    assert [x.title for x in lists] == ["Inköpslista", "Fest"]
-    assert lists[0].offline_id == "G1"
+    assert [x.name for x in lists] == ["Att handla", "Fest"]
+    assert lists[0].id == "G1"
+    assert lists[0].items[0].text == "banan"
 
 
-async def test_get_list_with_rows() -> None:
+async def test_get_list_filters_by_id() -> None:
     async with aiohttp.ClientSession() as session:
         client = _make_client(session)
         with aioresponses() as mock:
             mock.get(
-                f"{c.API_BASE}/{c.SL_PATH}/G1",
-                payload={
-                    "id": 1,
-                    "offlineId": "G1",
-                    "title": "Inköpslista",
-                    "rows": [
-                        {"offlineId": "R1", "productName": "Mjölk", "isStrikedOver": False}
-                    ],
-                },
+                f"{c.SHOPPING_LIST_BASE}/list/all",
+                payload=[
+                    {
+                        "id": "G1",
+                        "name": "Att handla",
+                        "rows": [{"id": "R1", "text": "mjölk", "isStriked": False}],
+                    }
+                ],
             )
             lst = await client.get_list("G1")
-    assert lst.items[0].product_name == "Mjölk"
+    assert lst.items[0].text == "mjölk"
 
 
-async def test_add_item_posts_created_row() -> None:
+async def test_add_item_with_article_posts_row() -> None:
+    captured: dict[str, Any] = {}
+
+    def _cb(url: Any, **kwargs: Any) -> CallbackResult:
+        captured.update(kwargs.get("json") or {})
+        return CallbackResult(
+            status=200,
+            payload={
+                "id": "NEWGUID",
+                "text": "mjölk",
+                "isStriked": False,
+                "article": {"id": 11103, "group": {"id": 10}, "extendedGroup": {"id": 10}},
+            },
+        )
+
     async with aiohttp.ClientSession() as session:
         client = _make_client(session)
         with aioresponses() as mock:
-            mock.post(f"{c.API_BASE}/{c.SL_PATH}/G1/sync", payload={})
-            await client.add_item("G1", "Ägg")
-            request_key = ("POST", re.compile(rf"{re.escape(c.API_BASE)}/{re.escape(c.SL_PATH)}/G1/sync"))
-        # aioresponses records the request; assert body contained createdRows.
-        (req,) = mock.requests[("POST", __import__("yarl").URL(f"{c.API_BASE}/{c.SL_PATH}/G1/sync"))]
-        body = req.kwargs["json"]
-        assert body["createdRows"][0]["productName"] == "Ägg"
-        assert body["createdRows"][0]["isStrikedOver"] is False
+            mock.post(f"{c.SHOPPING_LIST_BASE}/list/G1/row", callback=_cb)
+            item = await client.add_item(
+                "G1", "mjölk", article={"id": 11103, "articleGroupId": 10}
+            )
+    assert captured["text"] == "mjölk"
+    assert captured["isStriked"] is False
+    assert captured["quantity"] == {}
+    assert captured["article"]["articleGroupId"] == 10
+    assert item.text == "mjölk"
+    assert item.article_group_id == 10
+
+
+async def test_add_item_free_text_omits_article() -> None:
+    captured: dict[str, Any] = {}
+
+    def _cb(url: Any, **kwargs: Any) -> CallbackResult:
+        captured.update(kwargs.get("json") or {})
+        return CallbackResult(
+            status=200, payload={"id": "G", "text": "Ketchup Heinz", "isStriked": False}
+        )
+
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.post(f"{c.SHOPPING_LIST_BASE}/list/G1/row", callback=_cb)
+            item = await client.add_item("G1", "Ketchup Heinz")
+    assert "article" not in captured
+    assert item.text == "Ketchup Heinz"
 
 
 async def test_gateway_block_raises() -> None:
     async with aiohttp.ClientSession() as session:
         client = _make_client(session)
         with aioresponses() as mock:
-            mock.get(f"{c.API_BASE}/{c.SL_PATH}", status=403)
+            mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=403)
             with pytest.raises(IcaGatewayBlockedError):
                 await client.get_lists()
 ```
@@ -1053,105 +1151,85 @@ Expected: FAIL — cannot import `IcaClient`.
 - [ ] **Step 3: Create `custom_components/ica/api/client.py`**
 
 ```python
-"""ICA product and shopping-list API client (no Home Assistant imports)."""
+"""ICA product, article-search and web shopping-list client (no HA imports)."""
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
 
 from .auth import IcaAuth
-from .const import API_BASE, PRODUCT_PATH, SL_PATH, USER_AGENT
+from .const import ARTICLE_SEARCH_URL, PRODUCT_URL, SHOPPING_LIST_BASE, USER_AGENT
 from .exceptions import IcaConnectionError, IcaError, IcaGatewayBlockedError
-from .models import Product, ShoppingList
+from .models import Product, ShoppingList, ShoppingListItem
 
-_TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
-
-def _now_ts() -> str:
-    return datetime.now(timezone.utc).strftime(_TS_FORMAT)
-
-
-def _new_offline_id() -> str:
-    return str(uuid.uuid4()).upper()
+# Keys under which the article-search endpoint might nest its hit list. The exact
+# envelope is unconfirmed; a bare array is also accepted. Verify at smoke test.
+_SEARCH_LIST_KEYS = ("hits", "articles", "data", "result", "results")
 
 
 class IcaClient:
-    """Async client for ICA product lookup and shopping-list operations."""
+    """Async client for ICA product lookup, article search and shopping lists."""
 
     def __init__(self, session: aiohttp.ClientSession, auth: IcaAuth) -> None:
         self._session = session
         self._auth = auth
 
     async def get_product(self, ean: str) -> Product | None:
-        data = await self._request(
-            "GET", f"{PRODUCT_PATH}/{ean}", allow_404=True
-        )
+        data = await self._request("GET", f"{PRODUCT_URL}/{ean}", allow_404=True)
         if data is None:
             return None
         return Product.from_api(data)
 
+    async def search_articles(self, query: str) -> list[dict[str, Any]]:
+        data = await self._request(
+            "GET", ARTICLE_SEARCH_URL, params={"query": query}
+        )
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in _SEARCH_LIST_KEYS:
+                value = data.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
+
     async def get_lists(self) -> list[ShoppingList]:
-        data = await self._request("GET", SL_PATH)
+        data = await self._request("GET", f"{SHOPPING_LIST_BASE}/list/all")
+        # The web API returns a bare JSON array of lists.
+        return [ShoppingList.from_api(item) for item in (data or [])]
+
+    async def get_list(self, list_id: str) -> ShoppingList:
+        for lst in await self.get_lists():
+            if lst.id == list_id:
+                return lst
+        raise IcaError(f"Shopping list {list_id} not found")
+
+    async def add_item(
+        self, list_id: str, text: str, article: dict[str, Any] | None = None
+    ) -> ShoppingListItem:
+        body: dict[str, Any] = {"isStriked": False, "quantity": {}, "text": text}
+        if article is not None:
+            body["article"] = article
+        data = await self._request(
+            "POST", f"{SHOPPING_LIST_BASE}/list/{list_id}/row", json=body
+        )
         assert data is not None
-        return [ShoppingList.from_summary(x) for x in data.get("shoppingLists", [])]
-
-    async def get_list(self, offline_id: str) -> ShoppingList:
-        data = await self._request("GET", f"{SL_PATH}/{offline_id}")
-        assert data is not None
-        return ShoppingList.from_api(data)
-
-    async def add_item(self, offline_id: str, product_name: str) -> None:
-        body = {
-            "createdRows": [
-                {
-                    "offlineId": _new_offline_id(),
-                    "productName": product_name,
-                    "sourceId": -1,
-                    "isStrikedOver": False,
-                    "recipes": [],
-                }
-            ]
-        }
-        await self._request("POST", f"{SL_PATH}/{offline_id}/sync", json=body)
-
-    async def remove_item(self, offline_id: str, row_offline_id: str) -> None:
-        body = {"deletedRows": [row_offline_id]}
-        await self._request("POST", f"{SL_PATH}/{offline_id}/sync", json=body)
-
-    async def set_checked(
-        self,
-        offline_id: str,
-        row_offline_id: str,
-        product_name: str,
-        checked: bool,
-    ) -> None:
-        body = {
-            "changedRows": [
-                {
-                    "offlineId": row_offline_id,
-                    "productName": product_name,
-                    "isStrikedOver": checked,
-                    "latestChange": _now_ts(),
-                }
-            ]
-        }
-        await self._request("POST", f"{SL_PATH}/{offline_id}/sync", json=body)
+        return ShoppingListItem.from_api(data)
 
     async def _request(
         self,
         method: str,
-        path: str,
+        url: str,
         *,
         json: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
         allow_404: bool = False,
         _retry: bool = True,
-    ) -> dict[str, Any] | None:
+    ) -> Any:
         access = await self._auth.async_get_access_token()
-        url = f"{API_BASE}/{path}"
         headers = {
             "Authorization": f"Bearer {access}",
             "User-Agent": USER_AGENT,
@@ -1159,19 +1237,20 @@ class IcaClient:
         }
         try:
             async with self._session.request(
-                method, url, json=json, headers=headers
+                method, url, json=json, params=params, headers=headers
             ) as resp:
                 if resp.status == 404 and allow_404:
                     return None
                 if resp.status == 401 and _retry:
-                    # Token may have just expired; force refresh and retry once.
-                    self._auth.token and setattr(
-                        self._auth.token, "expires_at", datetime.now(timezone.utc)
-                    )
+                    token = self._auth.token
+                    if token is not None:
+                        # Force a refresh, then retry the request exactly once.
+                        token.expires_at = datetime.now(timezone.utc)
                     return await self._request(
                         method,
-                        path,
+                        url,
                         json=json,
+                        params=params,
                         allow_404=allow_404,
                         _retry=False,
                     )
@@ -1182,10 +1261,9 @@ class IcaClient:
                 if resp.status >= 400:
                     text = await resp.text()
                     raise IcaError(f"ICA API error {resp.status}: {text}")
-                if resp.status == 204 or not resp.content_length:
-                    return {}
-                payload: dict[str, Any] = await resp.json()
-                return payload
+                if resp.status == 204:
+                    return None
+                return await resp.json()
         except aiohttp.ClientError as err:
             raise IcaConnectionError(str(err)) from err
 ```
@@ -1203,7 +1281,7 @@ and add `"IcaClient",` to `__all__`.
 Run: `uv run pytest tests/api/test_client.py -v && uv run mypy custom_components/ica`
 Expected: tests PASS; mypy `Success`.
 
-> If `test_add_item_posts_created_row`'s request-introspection is brittle across `aioresponses` versions, simplify it to assert only that the POST was made (`assert mock.requests`) plus a dedicated body assertion using a captured callback. The behavioural contract (a `createdRows` POST to `/sync`) is what matters.
+> The add-item tests capture the request body via an `aioresponses` `callback` returning `CallbackResult`. If `search_articles` fails to find hits at smoke test, confirm the real envelope key and add it to `_SEARCH_LIST_KEYS`. The behavioural contract (add posts `{text, isStriked, quantity, article?}` to `/list/{id}/row`) is what matters.
 
 - [ ] **Step 6: Commit**
 
@@ -1231,7 +1309,7 @@ The HA glue: constants, manifest, config-entry setup/unload with token persisten
   - `const.py`: `DOMAIN = "ica"`, `CONF_PERSONNUMMER = "personnummer"`, `CONF_PASSWORD = "password"`, `CONF_LIST_ID = "list_id"`, `CONF_LIST_TITLE = "list_title"`, `CONF_TOKEN = "token"`, `CONF_SCAN_INTERVAL = "scan_interval"`, `DEFAULT_SCAN_INTERVAL = 5` (minutes), `UNKNOWN_ITEM_PREFIX = "Okänd vara"`, `PLATFORMS: list = []`.
   - `IcaRuntimeData` dataclass: `client: IcaClient`, `coordinator: IcaDataUpdateCoordinator`.
   - `type IcaConfigEntry = ConfigEntry[IcaRuntimeData]`.
-  - `IcaDataUpdateCoordinator(hass, client, offline_id, interval)`: `.data` is a `ShoppingList`; raises `ConfigEntryAuthFailed` on `IcaAuthError` (triggers reauth) and creates a repair issue on `IcaGatewayBlockedError`; method `has_item(name: str) -> bool` (case-insensitive).
+  - `IcaDataUpdateCoordinator(hass, client, list_id, interval)`: `.data` is a `ShoppingList`; raises `ConfigEntryAuthFailed` on `IcaAuthError` (triggers reauth) and creates a repair issue on `IcaGatewayBlockedError`; method `has_item(name: str) -> bool` (case-insensitive over row `text`).
   - `async_setup_entry`, `async_unload_entry`. Token persisted in **entry data** via `async_update_entry` (no separate `Store`, avoiding a dual-source staleness bug); refreshed tokens do NOT trigger a reload because the update listener only re-applies the poll interval.
 
 - [ ] **Step 1: Create `custom_components/ica/const.py`**
@@ -1306,7 +1384,7 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
         self,
         hass: HomeAssistant,
         client: IcaClient,
-        offline_id: str,
+        list_id: str,
         interval_minutes: int,
     ) -> None:
         super().__init__(
@@ -1316,11 +1394,11 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
             update_interval=timedelta(minutes=interval_minutes),
         )
         self.client = client
-        self.offline_id = offline_id
+        self.list_id = list_id
 
     async def _async_update_data(self) -> ShoppingList:
         try:
-            data = await self.client.get_list(self.offline_id)
+            data = await self.client.get_list(self.list_id)
         except IcaGatewayBlockedError as err:
             ir.async_create_issue(
                 self.hass,
@@ -1345,7 +1423,7 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
             return False
         target = name.strip().casefold()
         return any(
-            item.product_name.strip().casefold() == target for item in self.data.items
+            item.text.strip().casefold() == target for item in self.data.items
         )
 ```
 
@@ -1498,8 +1576,8 @@ async def test_setup_and_unload(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
 
     lst = ShoppingList(
-        offline_id="G1",
-        title="Inköpslista",
+        id="G1",
+        name="Inköpslista",
         items=[ShoppingListItem("R1", "Mjölk", False)],
     )
     with patch(
@@ -1609,7 +1687,7 @@ async def test_full_user_flow(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
 
-    lists = [ShoppingList(offline_id="G1", title="Inköpslista", list_id=1)]
+    lists = [ShoppingList(id="G1", name="Inköpslista")]
     with (
         patch(
             "custom_components.ica.config_flow.IcaAuth.login",
@@ -1706,7 +1784,7 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._token: IcaToken | None = None
-        self._lists: dict[str, str] = {}  # offline_id -> title
+        self._lists: dict[str, str] = {}  # list id (GUID) -> list name
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -1726,7 +1804,7 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
             except IcaConnectionError:
                 errors["base"] = "cannot_connect"
             else:
-                self._lists = {x.offline_id: x.title for x in lists}
+                self._lists = {x.id: x.name for x in lists}
                 return await self.async_step_pick_list()
         return self.async_show_form(
             step_id="user", data_schema=USER_SCHEMA, errors=errors
@@ -1737,15 +1815,15 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         if user_input is not None:
             assert self._token is not None
-            offline_id = user_input[CONF_LIST_ID]
-            await self.async_set_unique_id(offline_id)
+            list_id = user_input[CONF_LIST_ID]
+            await self.async_set_unique_id(list_id)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
-                title=f"ICA – {self._lists[offline_id]}",
+                title=f"ICA – {self._lists[list_id]}",
                 data={
                     CONF_TOKEN: self._token.to_dict(),
-                    CONF_LIST_ID: offline_id,
-                    CONF_LIST_TITLE: self._lists[offline_id],
+                    CONF_LIST_ID: list_id,
+                    CONF_LIST_TITLE: self._lists[list_id],
                 },
             )
         schema = vol.Schema(
@@ -1871,7 +1949,7 @@ async def _setup(hass: HomeAssistant, items: list[ShoppingListItem]) -> MockConf
         entry_id="e1",
     )
     entry.add_to_hass(hass)
-    lst = ShoppingList(offline_id="G1", title="Inköpslista", items=items)
+    lst = ShoppingList(id="G1", name="Inköpslista", items=items)
     with patch(
         "custom_components.ica.IcaClient.get_list", AsyncMock(return_value=lst)
     ):
@@ -1884,7 +1962,7 @@ async def test_lookup_product_found(hass: HomeAssistant) -> None:
     await _setup(hass, [])
     with patch(
         "custom_components.ica.services.IcaClient.get_product",
-        AsyncMock(return_value=Product("Mjölk", "7311041000000", None, None)),
+        AsyncMock(return_value=Product("Mjölk", "7311041000000", 1, 10, 10)),
     ):
         resp = await hass.services.async_call(
             DOMAIN,
@@ -1896,27 +1974,31 @@ async def test_lookup_product_found(hass: HomeAssistant) -> None:
     assert resp == {"found": True, "name": "Mjölk", "ean": "7311041000000"}
 
 
-async def test_scan_barcode_adds_new_product(hass: HomeAssistant) -> None:
+async def test_scan_barcode_attaches_article(hass: HomeAssistant) -> None:
     await _setup(hass, [])
     with (
         patch(
             "custom_components.ica.services.IcaClient.get_product",
-            AsyncMock(return_value=Product("Ägg", "222", None, None)),
+            AsyncMock(return_value=Product("mjölk", "7310865000293", 11103, 10, 10)),
         ),
         patch(
-            "custom_components.ica.services.IcaClient.add_item", AsyncMock()
-        ) as add,
-        patch("custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh", AsyncMock()),
+            "custom_components.ica.services.IcaClient.search_articles",
+            AsyncMock(return_value=[{"name": "mjölk", "id": 11103, "articleGroupId": 10}]),
+        ),
+        patch("custom_components.ica.services.IcaClient.add_item", AsyncMock()) as add,
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh",
+            AsyncMock(),
+        ),
     ):
         resp = await hass.services.async_call(
-            DOMAIN,
-            "scan_barcode",
-            {"barcode": "222"},
-            blocking=True,
-            return_response=True,
+            DOMAIN, "scan_barcode", {"barcode": "7310865000293"},
+            blocking=True, return_response=True,
         )
-    add.assert_awaited_once()
-    assert resp == {"found": True, "added": True, "name": "Ägg", "ean": "222"}
+    # The matching search hit (with its articleGroupId) is attached to the add.
+    _, kwargs = add.await_args
+    assert kwargs["article"]["articleGroupId"] == 10
+    assert resp == {"found": True, "added": True, "name": "mjölk", "ean": "7310865000293"}
 
 
 async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
@@ -1929,7 +2011,10 @@ async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
         patch(
             "custom_components.ica.services.IcaClient.add_item", AsyncMock()
         ) as add,
-        patch("custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh", AsyncMock()),
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh",
+            AsyncMock(),
+        ),
     ):
         resp = await hass.services.async_call(
             DOMAIN,
@@ -1938,7 +2023,7 @@ async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
             blocking=True,
             return_response=True,
         )
-    add.assert_awaited_once_with("G1", "Okänd vara 999")
+    add.assert_awaited_once_with("G1", "Okänd vara 999", article=None)
     assert resp == {"found": False, "added": True, "name": "Okänd vara 999", "ean": "999"}
 
 
@@ -1946,7 +2031,10 @@ async def test_add_item_dedupes(hass: HomeAssistant) -> None:
     await _setup(hass, [ShoppingListItem("R1", "Mjölk", False)])
     with (
         patch("custom_components.ica.services.IcaClient.add_item", AsyncMock()) as add,
-        patch("custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh", AsyncMock()),
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh",
+            AsyncMock(),
+        ),
     ):
         resp = await hass.services.async_call(
             DOMAIN, "add_item", {"name": "mjölk"}, blocking=True, return_response=True
@@ -1980,7 +2068,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 import homeassistant.helpers.config_validation as cv
 
-from .api import IcaClient, IcaError
+from .api import IcaClient, IcaError, Product
 from .const import DOMAIN, UNKNOWN_ITEM_PREFIX
 
 SERVICE_LOOKUP_PRODUCT = "lookup_product"
@@ -2013,31 +2101,54 @@ def _get_runtime(hass: HomeAssistant) -> Any:
 
 
 async def _resolve_list_id(runtime: Any, list_name: str | None) -> str:
-    """Return the offline_id of the target list (default if not named)."""
+    """Return the id (GUID) of the target list (default if not named)."""
     if list_name is None:
-        return cast(str, runtime.coordinator.offline_id)
+        return cast(str, runtime.coordinator.list_id)
     client: IcaClient = runtime.client
     for lst in await client.get_lists():
-        if lst.title.strip().casefold() == list_name.strip().casefold():
-            return lst.offline_id
+        if lst.name.strip().casefold() == list_name.strip().casefold():
+            return lst.id
     raise ServiceValidationError(f"No ICA list named '{list_name}'")
 
 
-async def _add_deduped(runtime: Any, list_id: str, name: str) -> bool:
+async def _resolve_article(client: IcaClient, product: Product) -> dict[str, Any] | None:
+    """Find the best catalog article for a product, for correct categorisation.
+
+    Prefers an exact-name search hit, else the first hit, else a minimal article
+    built from the product's own group ids; None if we have nothing to attach.
+    """
+    try:
+        hits = await client.search_articles(product.name)
+    except IcaError:
+        hits = []
+    target = product.name.strip().casefold()
+    for hit in hits:
+        if str(hit.get("name", "")).strip().casefold() == target:
+            return hit
+    if hits:
+        return hits[0]
+    if product.article_group_id is not None:
+        return product.to_row_article()
+    return None
+
+
+async def _add_deduped(
+    runtime: Any, list_id: str, name: str, article: dict[str, Any] | None = None
+) -> bool:
     """Add an item unless a case-insensitive name match already exists.
 
     Returns True if it was added, False if it was a duplicate.
     """
     coordinator = runtime.coordinator
-    is_default = list_id == coordinator.offline_id
+    is_default = list_id == coordinator.list_id
     if is_default and coordinator.has_item(name):
         return False
     if not is_default:
         existing = await runtime.client.get_list(list_id)
         target = name.strip().casefold()
-        if any(i.product_name.strip().casefold() == target for i in existing.items):
+        if any(i.text.strip().casefold() == target for i in existing.items):
             return False
-    await runtime.client.add_item(list_id, name)
+    await runtime.client.add_item(list_id, name, article=article)
     if is_default:
         await coordinator.async_request_refresh()
     return True
@@ -2075,14 +2186,17 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         ean = call.data[ATTR_BARCODE]
         try:
             product = await client.get_product(ean)
+            list_id = await _resolve_list_id(runtime, call.data.get(ATTR_LIST))
             if product is not None:
                 name = product.name
                 found = True
+                # Attach the catalog article so ICA files it in the right category.
+                article = await _resolve_article(client, product)
             else:
                 name = f"{UNKNOWN_ITEM_PREFIX} {ean}"
                 found = False
-            list_id = await _resolve_list_id(runtime, call.data.get(ATTR_LIST))
-            added = await _add_deduped(runtime, list_id, name)
+                article = None
+            added = await _add_deduped(runtime, list_id, name, article=article)
         except IcaError as err:
             raise HomeAssistantError(str(err)) from err
         return {"found": found, "added": added, "name": name, "ean": ean}
@@ -2404,17 +2518,76 @@ This is the acceptance gate the mocked tests cannot cover.
 1. Copy `custom_components/ica/` into a Home Assistant `config/custom_components/` (or add the repo via HACS as a custom repository) and restart HA.
 2. Settings → Devices & Services → Add Integration → "ICA Shopping List". Enter your 12-digit personnummer + password. Confirm the list picker shows your real lists; pick your default.
 3. Developer Tools → Actions → `ica.lookup_product` with a real grocery EAN → confirm `found: true` and the correct name. If the name is wrong/missing, capture the raw response and reconcile `Product.from_api` (Task 2) with the real JSON.
-4. Call `ica.scan_barcode` with the same EAN → confirm the item appears in the ICA app. Call it again → confirm it is NOT duplicated (dedupe).
-5. Call `ica.scan_barcode` with a nonsense number (e.g. `0000000000000`) → confirm `found: false` and an `Okänd vara 0000000000000` item is added.
+4. Call `ica.scan_barcode` with the same EAN → confirm the item appears in the ICA app **in the correct category/aisle** (e.g. a dairy EAN lands under Mejeri). Call it again → confirm it is NOT duplicated (dedupe). If categorisation is wrong, inspect the `search?query=<name>` response and confirm `_SEARCH_LIST_KEYS` / the attached `article` shape.
+5. Call `ica.scan_barcode` with a nonsense number (e.g. `0000000000000`) → confirm `found: false` and an `Okänd vara 0000000000000` item is added (uncategorised is fine).
 6. Wait for/trigger a coordinator refresh → confirm no auth errors after ~15 min (token refresh path).
 
-- [ ] **Step 7: Record smoke-test results** in the PR / commit message, noting any field-name corrections made to `Product.from_api`.
+- [ ] **Step 7: Record smoke-test results** in the PR / commit message, noting any corrections to `Product.from_api`, the article-search envelope, or the add-row `article` shape.
 
 ---
 
 ## Notes for the executor
 
 - **Auth is reverse-engineered.** If a login step fails during the smoke test, diff your request against `ica_mcp/client.py` (cited in Task 3) — the likely culprits are redirect handling (`allow_redirects=False`) or the SSO-token HTML regex.
-- **`sourceId` in `add_item`** is a client-side temporary id; `-1` is fine for single adds. If the API rejects duplicate `sourceId`s in a batch, switch to a per-row counter.
+- **The shopping-list API is the ICA.se *web* API** (`.../digx/shopping-list/v1/...`), confirmed against the user's real traffic — see the appendix for exact requests/responses. It is NOT ica-mcp's mobile shopping-list service; only auth + product lookup come from ica-mcp.
+- **Article search envelope is unconfirmed.** `search_articles` accepts a bare array or a `{hits|articles|data|result|results}` envelope. If the smoke test finds no hits, capture the real `search?query=` body and adjust `_SEARCH_LIST_KEYS`.
 - **Do not** add runtime dependencies to `manifest.json`; if you think you need one, you probably don't (stdlib + `aiohttp` cover it).
 - **`brand` was intentionally dropped** from the `lookup_product` response the spec sketched (`{found, name, ean, brand?}`). Upstream `ica-mcp` reads only `gtin`/`name`/`articleId`/`articleGroupId` from the product response — there is no reliable brand field — so the response is `{found, name, ean}`. If a real product response (smoke test) exposes a brand field, add it to `Product.from_api` and the service response then.
+
+---
+
+## Appendix: confirmed ICA web API (captured from real traffic)
+
+All on `https://apimgw-pub.ica.se`, Bearer-token auth (the DCR/PKCE flow in Task 3).
+Base `SHOPPING_LIST_BASE = .../sverige/digx/shopping-list/v1/api`.
+
+### Read all lists (Phase 1) — `GET {SHOPPING_LIST_BASE}/list/all`
+Returns a **bare JSON array** of lists. Each list:
+```jsonc
+{ "id": "<GUID>", "name": "Att handla", "comment": "", "sortingStore": 8900,
+  "rows": [ /* rows, see below */ ],
+  "shoppingListId": 36891048, "householdId": 538959503, "secureId": "<GUID>" }
+```
+Each row:
+```jsonc
+{ "id": "<row GUID>", "text": "mjölk", "isStriked": false, "order": -184,
+  "quantity": null | { "amount": 2.0, "unit": "st" },
+  "article": { "id": 11103, "name": null, "ean": null,
+               "group": { "id": 10, "name": null },
+               "extendedGroup": { "id": 10, "name": null } },
+  "shoppingListRowId": 1030857476, "ingredientGroup": 0 }
+```
+Observed `group.id` semantics: 4 = Frukt & Grönt, 5 = Fryst, 6 = Ost, 10 = Mejeri,
+9 = Skafferi/Övrigt (catch-all; `extendedGroup` splits it), 11 = Hushåll, 3/12 = Godis.
+Names come back `null` (resolve via a separate reference endpoint if ever needed).
+
+### Article search (Phase 1) — `GET .../sverige/digx/shoppinglistarticlesearch/v1/search?query=<q>`
+Autocomplete the web app runs before adding. Returns catalog articles carrying
+`id`, `name`, `productEan`, `articleGroupId`, `expandedArticleGroupId`,
+`articleGroupName`, `expandedArticleGroupName` (+ `_id` like `"shoppingarticle_11103"`).
+**Response envelope not yet captured** — `search_articles` handles array or
+`{hits|articles|data|result|results}`.
+
+### Add a row (Phase 1) — `POST {SHOPPING_LIST_BASE}/list/{listId}/row`
+Request (the `article` object is a search hit, passed through verbatim):
+```jsonc
+{ "isStriked": false, "quantity": {}, "text": "mjölk",
+  "article": { "_id": "shoppingarticle_11103", "id": 11103, "name": "mjölk",
+               "productEan": "7310865000293",
+               "articleGroupId": 10, "expandedArticleGroupId": 10,
+               "articleGroupName": "Mejeri", "expandedArticleGroupName": "Mejeri", ... } }
+```
+Free-text add (no match) omits `article`; ICA assigns a negative `article.id` and a
+default group server-side. Response = the created row (row shape above).
+
+### Update / check a row (Phase 2) — `PUT {SHOPPING_LIST_BASE}/row/{rowId}`
+Body = the **full row** object with `isStriked` toggled (note: keyed on the row
+GUID under `/row/`, not `/list/{id}/`). Response = updated row.
+
+### Delete a row (Phase 2) — `DELETE {SHOPPING_LIST_BASE}/row/{rowId}`
+No request body.
+
+### Product lookup by EAN (Phase 1) — `GET {PRODUCT_URL}/{ean}`
+`PRODUCT_URL = .../sverige/digx/mobile/productservice/v1/product`. From `ica-mcp`;
+returns `gtin`, `name`, `articleId`, `articleGroupId`, `expandedArticleGroupId`
+(200) or 404 when unknown. **Exact shape to be confirmed at smoke test.**
