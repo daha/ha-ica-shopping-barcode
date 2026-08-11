@@ -104,15 +104,19 @@ list operations and the **product service** for EAN lookup. Public surface (all
 - `async login(personnummer, password) -> Session` — full DCR + PKCE + credential
   flow; returns/persists tokens.
 - `async ensure_token()` — refresh if expired.
-- `get_product(ean) -> Product | None` — EAN/GTIN lookup via product service;
-  `None` if unknown. Returns name + `article_id` + `article_group_id` +
-  `extended_article_group_id`.
+- `get_product(ean) -> Product | None` — EAN lookup; `None` if unknown. `Product`
+  **retains the full raw payload** (`raw`) plus convenience fields (name, ean,
+  article ids, group ids). Nothing is discarded. *(The exact lookup endpoint —
+  product-service vs the article search by EAN — is being confirmed against a real
+  response; `Product.from_api` accepts either shape.)*
 - `get_lists() -> list[ShoppingList]` — `GET .../list/all` (returns lists with rows).
-- `add_item(list_id, text, article=None) -> Item` — add a row; when `article` is
-  supplied (from a barcode lookup) attach its group id(s) so ICA files the row in
-  the correct category. *(exact write endpoint + payload pending browser capture.)*
-- `remove_item(list_id, item_id) -> None` — *(pending capture.)*
-- `set_checked(list_id, item_id, checked: bool) -> None` — *(pending capture.)*
+- `add_item(list_id, text, article=None) -> Item` — `POST .../list/{id}/row`. For a
+  scanned product, `article = Product.to_row_article()` passes the **entire** lookup
+  object through (store-format categories, group names, ids), so ICA sorts the row
+  correctly in any store format; free-text adds omit `article` and ICA classifies
+  server-side.
+- `remove_item(list_id, row_id) -> None` — Phase 2; `DELETE .../row/{id}`.
+- `set_checked(list_id, row_id, checked) -> None` — Phase 2; `PUT .../row/{id}` (full row).
 
 **Data model (web dialect, from the real response):** a list is
 `{id (GUID), name, comment, sortingStore, rows[], shoppingListId (int),

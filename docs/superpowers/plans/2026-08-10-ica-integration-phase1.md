@@ -358,21 +358,44 @@ def test_product_from_api() -> None:
     assert product.extended_article_group_id == 10
 
 
-def test_product_to_row_article() -> None:
+def test_product_from_api_search_shape() -> None:
+    # The alternative (article-search) shape uses `id`/`productEan`.
     product = Product.from_api(
-        {
-            "gtin": "7310865000293",
-            "name": "mjölk",
-            "articleId": 11103,
-            "articleGroupId": 10,
-            "expandedArticleGroupId": 10,
-        }
+        {"id": 11103, "name": "mjölk", "productEan": "7310865000293", "articleGroupId": 10}
     )
-    article = product.to_row_article()
+    assert product.article_id == 11103
+    assert product.ean == "7310865000293"
+
+
+def test_product_to_row_article_passes_everything_through() -> None:
+    # Every field from the lookup must survive — incl. store-format categories.
+    raw = {
+        "id": 11103,
+        "name": "mjölk",
+        "productEan": "7310865000293",
+        "articleGroupId": 10,
+        "expandedArticleGroupId": 10,
+        "articleGroupName": "Mejeri",
+        "maxiFormatCategoryId": "2510",
+        "naraFormatCategoryName": "Mejeri/juice",
+    }
+    article = Product.from_api(raw).to_row_article()
     assert article["id"] == 11103
     assert article["articleGroupId"] == 10
-    assert article["expandedArticleGroupId"] == 10
     assert article["productEan"] == "7310865000293"
+    # Store-format category fields are preserved, not dropped.
+    assert article["maxiFormatCategoryId"] == "2510"
+    assert article["naraFormatCategoryName"] == "Mejeri/juice"
+
+
+def test_product_to_row_article_ensures_keys_when_raw_sparse() -> None:
+    # Convenience-built Product (empty raw) still yields the required keys.
+    product = Product("mjölk", "7310865000293", 11103, 10, 10)
+    article = product.to_row_article()
+    assert article["id"] == 11103
+    assert article["productEan"] == "7310865000293"
+    assert article["articleGroupId"] == 10
+    assert article["expandedArticleGroupId"] == 10
 
 
 def test_shopping_list_item_from_api() -> None:
@@ -442,13 +465,21 @@ from typing import Any
 
 @dataclass(slots=True)
 class Product:
-    """A product returned by the ICA product service (EAN lookup)."""
+    """A product from the ICA lookup. Keeps the FULL raw payload (`raw`).
+
+    Convenience fields are extracted for our own logic (dedupe, service
+    responses), but nothing is discarded — `to_row_article()` passes the whole
+    object through so store-format category data survives into the ICA list.
+    Field aliases handle both the product-service (`gtin`/`articleId`) and the
+    article-search (`productEan`/`id`) shapes.
+    """
 
     name: str
     ean: str | None
     article_id: int | None
     article_group_id: int | None
     extended_article_group_id: int | None
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Product":
@@ -456,24 +487,31 @@ class Product:
         group = data.get("articleGroupId")
         return cls(
             name=data["name"],
-            ean=data.get("gtin"),
-            article_id=data.get("articleId"),
+            ean=data.get("gtin") or data.get("productEan"),
+            article_id=data.get("articleId") or data.get("id"),
             article_group_id=group,
             extended_article_group_id=data.get("expandedArticleGroupId", group),
+            raw=data,
         )
 
     def to_row_article(self) -> dict[str, Any]:
-        """Build the `article` object for an add-row request.
+        """Return the full `article` object for an add-row request.
 
-        Carries the group ids so ICA files the row in the correct category.
+        Passes through EVERY field from the lookup (store-format categories,
+        group names, etc.) and only *ensures* the keys the add endpoint needs
+        (`id`, `productEan`, `articleGroupId`, `expandedArticleGroupId`) are
+        present — never overriding what the payload already carries.
         """
-        return {
-            "id": self.article_id,
-            "name": self.name,
-            "productEan": self.ean,
-            "articleGroupId": self.article_group_id,
-            "expandedArticleGroupId": self.extended_article_group_id,
-        }
+        article = dict(self.raw)
+        article.setdefault("id", self.article_id)
+        article.setdefault("productEan", self.ean)
+        if self.article_group_id is not None:
+            article.setdefault("articleGroupId", self.article_group_id)
+        if self.extended_article_group_id is not None:
+            article.setdefault(
+                "expandedArticleGroupId", self.extended_article_group_id
+            )
+        return article
 
 
 @dataclass(slots=True)
@@ -963,7 +1001,7 @@ Product lookup and **web** shopping-list operations, layered on `IcaAuth`. Handl
 **Interfaces:**
 - Consumes: `IcaAuth.async_get_access_token()`, `IcaAuth.token`; `const.SHOPPING_LIST_BASE`, `PRODUCT_URL`, `USER_AGENT`; models (`Product`, `ShoppingList`, `ShoppingListItem`); exceptions.
 - Produces `IcaClient(session: aiohttp.ClientSession, auth: IcaAuth)`:
-  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404. Carries `article_group_id` / `extended_article_group_id`, so no separate article search is needed for categorisation.
+  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404. `Product` keeps the **full raw response** (`Product.raw`), so no field is lost. `from_api` accepts both the product-service (`gtin`/`articleId`) and article-search (`productEan`/`id`) shapes. *(If the smoke test shows the product-service response is lean/missing store-format categories, switch this to query the article search by EAN — which returns the rich object — and take the first hit; `from_api`/`to_row_article` need no change.)*
   - `async get_lists() -> list[ShoppingList]` — `GET {SHOPPING_LIST_BASE}/list/all` (bare JSON array).
   - `async get_list(list_id: str) -> ShoppingList` — convenience: `get_lists()` filtered by `id`; raises `IcaError` if not found.
   - `async add_item(list_id: str, text: str, article: dict[str, Any] | None = None) -> ShoppingListItem` — `POST {SHOPPING_LIST_BASE}/list/{list_id}/row`, body `{"isStriked": False, "quantity": {}, "text": text, "article"?: article}`; `article` is `Product.to_row_article()` (from the EAN lookup) or `None` for free text; passed through verbatim; returns the created row.
@@ -2474,7 +2512,8 @@ This is the acceptance gate the mocked tests cannot cover.
 
 - **Auth is reverse-engineered.** If a login step fails during the smoke test, diff your request against `ica_mcp/client.py` (cited in Task 3) — the likely culprits are redirect handling (`allow_redirects=False`) or the SSO-token HTML regex.
 - **The shopping-list API is the ICA.se *web* API** (`.../digx/shopping-list/v1/...`), confirmed against the user's real traffic — see the appendix for exact requests/responses. It is NOT ica-mcp's mobile shopping-list service; only auth + product lookup come from ica-mcp.
-- **No article search in Phase 1.** The EAN lookup already returns the article group ids, so `scan_barcode` builds the `article` from `Product.to_row_article()`. The web app's `shoppinglistarticlesearch` call (appendix) is the documented fallback only if a minimal article turns out to be insufficient at smoke test.
+- **Preserve the full article, never re-pick fields.** `Product` keeps the raw lookup payload and `to_row_article()` passes it through wholesale (store-format categories `maxi/kvantum/supermarket/naraFormatCategory*`, group names, etc.) so the list sorts correctly in any ICA store format. It only *ensures* `id`/`productEan`/`articleGroupId`/`expandedArticleGroupId` exist.
+- **Lookup endpoint to confirm at smoke test.** Capture a real EAN lookup response. If the product-service (`PRODUCT_URL`) returns the rich object → done. If it's lean/missing store-format categories, point `get_product` at the article search by EAN (`shoppinglistarticlesearch`, appendix), which returns the rich object; `from_api`/`to_row_article` handle both shapes unchanged.
 - **Do not** add runtime dependencies to `manifest.json`; if you think you need one, you probably don't (stdlib + `aiohttp` cover it).
 - **`brand` was intentionally dropped** from the `lookup_product` response the spec sketched (`{found, name, ean, brand?}`). Upstream `ica-mcp` reads only `gtin`/`name`/`articleId`/`articleGroupId` from the product response — there is no reliable brand field — so the response is `{found, name, ean}`. If a real product response (smoke test) exposes a brand field, add it to `Product.from_api` and the service response then.
 
@@ -2515,7 +2554,8 @@ proves insufficient (its response envelope was not captured).
 
 ### Add a row (Phase 1) — `POST {SHOPPING_LIST_BASE}/list/{listId}/row`
 Request (the `article` object below is what the web app sent from a search hit;
-our client sends the equivalent subset from `Product.to_row_article()`):
+our client sends the **entire** lookup object via `Product.to_row_article()`,
+preserving all store-format category fields — not a hand-picked subset):
 ```jsonc
 { "isStriked": false, "quantity": {}, "text": "mjölk",
   "article": { "_id": "shoppingarticle_11103", "id": 11103, "name": "mjölk",
