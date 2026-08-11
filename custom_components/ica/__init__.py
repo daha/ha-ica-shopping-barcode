@@ -1,0 +1,1 @@
+"""ICA Shopping List integration."""
