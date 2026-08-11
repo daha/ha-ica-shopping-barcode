@@ -1001,7 +1001,7 @@ Product lookup and **web** shopping-list operations, layered on `IcaAuth`. Handl
 **Interfaces:**
 - Consumes: `IcaAuth.async_get_access_token()`, `IcaAuth.token`; `const.SHOPPING_LIST_BASE`, `PRODUCT_URL`, `USER_AGENT`; models (`Product`, `ShoppingList`, `ShoppingListItem`); exceptions.
 - Produces `IcaClient(session: aiohttp.ClientSession, auth: IcaAuth)`:
-  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404. This is ICA's EAN endpoint (search-by-EAN is confirmed NOT to work). `Product` keeps the **full raw response** (`Product.raw`), so no field is lost; `from_api` tolerates both `gtin`/`articleId` and `productEan`/`id` key spellings.
+  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404. This is ICA's precise EAN endpoint (the article search accepts an EAN query but returns fuzzy/multiple hits, so it's unsuitable for a scanner). `Product` keeps the **full raw response** (`Product.raw`), so no field is lost; `from_api` tolerates both `gtin`/`articleId` and `productEan`/`id` key spellings.
   - `async get_lists() -> list[ShoppingList]` — `GET {SHOPPING_LIST_BASE}/list/all` (bare JSON array).
   - `async get_list(list_id: str) -> ShoppingList` — convenience: `get_lists()` filtered by `id`; raises `IcaError` if not found.
   - `async add_item(list_id: str, text: str, article: dict[str, Any] | None = None) -> ShoppingListItem` — `POST {SHOPPING_LIST_BASE}/list/{list_id}/row`, body `{"isStriked": False, "quantity": {}, "text": text, "article"?: article}`; `article` is `Product.to_row_article()` (from the EAN lookup) or `None` for free text; passed through verbatim; returns the created row.
@@ -2513,7 +2513,7 @@ This is the acceptance gate the mocked tests cannot cover.
 - **Auth is reverse-engineered.** If a login step fails during the smoke test, diff your request against `ica_mcp/client.py` (cited in Task 3) — the likely culprits are redirect handling (`allow_redirects=False`) or the SSO-token HTML regex.
 - **The shopping-list API is the ICA.se *web* API** (`.../digx/shopping-list/v1/...`), confirmed against the user's real traffic — see the appendix for exact requests/responses. It is NOT ica-mcp's mobile shopping-list service; only auth + product lookup come from ica-mcp.
 - **Preserve the full article, never re-pick fields.** `Product` keeps the raw lookup payload and `to_row_article()` passes it through wholesale (store-format categories `maxi/kvantum/supermarket/naraFormatCategory*`, group names, etc.) so the list sorts correctly in any ICA store format. It only *ensures* `id`/`productEan`/`articleGroupId`/`expandedArticleGroupId` exist.
-- **EAN lookup endpoint is fixed** to the product-service (`PRODUCT_URL`) — search-by-EAN is confirmed not to work. The smoke test just records how rich that response is; whatever it returns is preserved in `Product.raw`. Even a lean response still carries `articleGroupId`/`expandedArticleGroupId` for correct primary categorisation.
+- **EAN lookup endpoint is fixed** to the product-service (`PRODUCT_URL`) — the article search accepts an EAN query but returns fuzzy/multiple hits, not a unique product, so it is unsuitable for a scanner. The smoke test (and the user's notebook check) records how rich the product-service response is; whatever it returns is preserved in `Product.raw`. Even a lean response still carries `articleGroupId`/`expandedArticleGroupId` for correct primary categorisation.
 - **Do not** add runtime dependencies to `manifest.json`; if you think you need one, you probably don't (stdlib + `aiohttp` cover it).
 - **`brand` was intentionally dropped** from the `lookup_product` response the spec sketched (`{found, name, ean, brand?}`). Upstream `ica-mcp` reads only `gtin`/`name`/`articleId`/`articleGroupId` from the product response — there is no reliable brand field — so the response is `{found, name, ean}`. If a real product response (smoke test) exposes a brand field, add it to `Product.from_api` and the service response then.
 
@@ -2549,9 +2549,9 @@ The name autocomplete the web app runs before a manual add. Returns catalog
 articles carrying `id`, `name`, `productEan`, `articleGroupId`,
 `expandedArticleGroupId`, `articleGroupName`, `expandedArticleGroupName`,
 store-format categories (+ `_id` like `"shoppingarticle_11103"`).
-We **do not use it**: it matches on product *name*, not EAN (searching by EAN was
-confirmed not to work), and the barcode flow already has the EAN → uses the
-product-service lookup below.
+We **do not use it**: an EAN query (`?query=<ean>`) returns fuzzy/multiple hits
+rather than a unique product, so it can't reliably map a barcode. The barcode flow
+already has the EAN and uses the product-service lookup below for a precise match.
 
 ### Add a row (Phase 1) — `POST {SHOPPING_LIST_BASE}/list/{listId}/row`
 Request (the `article` object below is what the web app sent from a search hit;
@@ -2576,7 +2576,8 @@ No request body.
 
 ### Product lookup by EAN (Phase 1) — `GET {PRODUCT_URL}/{ean}`
 `PRODUCT_URL = .../sverige/digx/mobile/productservice/v1/product`. The confirmed
-EAN endpoint (from `ica-mcp`; user confirmed search-by-EAN does not work). Known
+EAN endpoint (from `ica-mcp`; the article search returns fuzzy/multiple hits for an
+EAN query, so it is not used for the scanner). Known
 fields include `gtin`, `name`, `articleId`, `articleGroupId`,
 `expandedArticleGroupId` (200) or 404 when unknown. The **full response is kept**
 in `Product.raw` and passed through on add. **Exact/complete shape to be captured
