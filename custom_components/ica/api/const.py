@@ -24,7 +24,7 @@ USER_AGENT = (
 # Web shopping-list service (ica.se) — the API our account actually uses.
 #   list all:   GET    {SHOPPING_LIST_BASE}/list/all
 #   add row:    POST   {SHOPPING_LIST_BASE}/list/{list_id}/row
-#   update row: PUT    {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: check; full-row body)
+#   update row: PUT    {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: check; full row)
 #   delete row: DELETE {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: no body)
 SHOPPING_LIST_BASE = f"{API_BASE}/sverige/digx/shopping-list/v1/api"
 # Product service (EAN/GTIN lookup) — GET {PRODUCT_URL}/{ean}.
