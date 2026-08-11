@@ -1001,7 +1001,7 @@ Product lookup and **web** shopping-list operations, layered on `IcaAuth`. Handl
 **Interfaces:**
 - Consumes: `IcaAuth.async_get_access_token()`, `IcaAuth.token`; `const.SHOPPING_LIST_BASE`, `PRODUCT_URL`, `USER_AGENT`; models (`Product`, `ShoppingList`, `ShoppingListItem`); exceptions.
 - Produces `IcaClient(session: aiohttp.ClientSession, auth: IcaAuth)`:
-  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404. `Product` keeps the **full raw response** (`Product.raw`), so no field is lost. `from_api` accepts both the product-service (`gtin`/`articleId`) and article-search (`productEan`/`id`) shapes. *(If the smoke test shows the product-service response is lean/missing store-format categories, switch this to query the article search by EAN — which returns the rich object — and take the first hit; `from_api`/`to_row_article` need no change.)*
+  - `async get_product(ean: str) -> Product | None` — `GET {PRODUCT_URL}/{ean}`; None on 404. This is ICA's EAN endpoint (search-by-EAN is confirmed NOT to work). `Product` keeps the **full raw response** (`Product.raw`), so no field is lost; `from_api` tolerates both `gtin`/`articleId` and `productEan`/`id` key spellings.
   - `async get_lists() -> list[ShoppingList]` — `GET {SHOPPING_LIST_BASE}/list/all` (bare JSON array).
   - `async get_list(list_id: str) -> ShoppingList` — convenience: `get_lists()` filtered by `id`; raises `IcaError` if not found.
   - `async add_item(list_id: str, text: str, article: dict[str, Any] | None = None) -> ShoppingListItem` — `POST {SHOPPING_LIST_BASE}/list/{list_id}/row`, body `{"isStriked": False, "quantity": {}, "text": text, "article"?: article}`; `article` is `Product.to_row_article()` (from the EAN lookup) or `None` for free text; passed through verbatim; returns the created row.
@@ -2500,7 +2500,7 @@ This is the acceptance gate the mocked tests cannot cover.
 1. Copy `custom_components/ica/` into a Home Assistant `config/custom_components/` (or add the repo via HACS as a custom repository) and restart HA.
 2. Settings → Devices & Services → Add Integration → "ICA Shopping List". Enter your 12-digit personnummer + password. Confirm the list picker shows your real lists; pick your default.
 3. Developer Tools → Actions → `ica.lookup_product` with a real grocery EAN → confirm `found: true` and the correct name. If the name is wrong/missing, capture the raw response and reconcile `Product.from_api` (Task 2) with the real JSON.
-4. Call `ica.scan_barcode` with the same EAN → confirm the item appears in the ICA app **in the correct category/aisle** (e.g. a dairy EAN lands under Mejeri). Call it again → confirm it is NOT duplicated (dedupe). If categorisation is wrong or the add is rejected, inspect the outgoing `article` object; if a minimal article is insufficient, the fallback is to reintroduce the `shoppinglistarticlesearch` call (see appendix) and embed its hit.
+4. Call `ica.scan_barcode` with the same EAN → confirm the item appears in the ICA app **in the correct category/aisle** (e.g. a dairy EAN lands under Mejeri). Call it again → confirm it is NOT duplicated (dedupe). Capture the `GET {PRODUCT_URL}/{ean}` response and confirm `Product.from_api` reads it correctly; note whether it includes the store-format category fields.
 5. Call `ica.scan_barcode` with a nonsense number (e.g. `0000000000000`) → confirm `found: false` and an `Okänd vara 0000000000000` item is added (uncategorised is fine).
 6. Wait for/trigger a coordinator refresh → confirm no auth errors after ~15 min (token refresh path).
 
@@ -2513,7 +2513,7 @@ This is the acceptance gate the mocked tests cannot cover.
 - **Auth is reverse-engineered.** If a login step fails during the smoke test, diff your request against `ica_mcp/client.py` (cited in Task 3) — the likely culprits are redirect handling (`allow_redirects=False`) or the SSO-token HTML regex.
 - **The shopping-list API is the ICA.se *web* API** (`.../digx/shopping-list/v1/...`), confirmed against the user's real traffic — see the appendix for exact requests/responses. It is NOT ica-mcp's mobile shopping-list service; only auth + product lookup come from ica-mcp.
 - **Preserve the full article, never re-pick fields.** `Product` keeps the raw lookup payload and `to_row_article()` passes it through wholesale (store-format categories `maxi/kvantum/supermarket/naraFormatCategory*`, group names, etc.) so the list sorts correctly in any ICA store format. It only *ensures* `id`/`productEan`/`articleGroupId`/`expandedArticleGroupId` exist.
-- **Lookup endpoint to confirm at smoke test.** Capture a real EAN lookup response. If the product-service (`PRODUCT_URL`) returns the rich object → done. If it's lean/missing store-format categories, point `get_product` at the article search by EAN (`shoppinglistarticlesearch`, appendix), which returns the rich object; `from_api`/`to_row_article` handle both shapes unchanged.
+- **EAN lookup endpoint is fixed** to the product-service (`PRODUCT_URL`) — search-by-EAN is confirmed not to work. The smoke test just records how rich that response is; whatever it returns is preserved in `Product.raw`. Even a lean response still carries `articleGroupId`/`expandedArticleGroupId` for correct primary categorisation.
 - **Do not** add runtime dependencies to `manifest.json`; if you think you need one, you probably don't (stdlib + `aiohttp` cover it).
 - **`brand` was intentionally dropped** from the `lookup_product` response the spec sketched (`{found, name, ean, brand?}`). Upstream `ica-mcp` reads only `gtin`/`name`/`articleId`/`articleGroupId` from the product response — there is no reliable brand field — so the response is `{found, name, ean}`. If a real product response (smoke test) exposes a brand field, add it to `Product.from_api` and the service response then.
 
@@ -2544,13 +2544,14 @@ Observed `group.id` semantics: 4 = Frukt & Grönt, 5 = Fryst, 6 = Ost, 10 = Meje
 9 = Skafferi/Övrigt (catch-all; `extendedGroup` splits it), 11 = Hushåll, 3/12 = Godis.
 Names come back `null` (resolve via a separate reference endpoint if ever needed).
 
-### Article search (observed, NOT used — fallback only) — `GET .../sverige/digx/shoppinglistarticlesearch/v1/search?query=<q>`
-The autocomplete the web app runs before adding. Returns catalog articles carrying
-`id`, `name`, `productEan`, `articleGroupId`, `expandedArticleGroupId`,
-`articleGroupName`, `expandedArticleGroupName` (+ `_id` like `"shoppingarticle_11103"`).
-We **skip this in Phase 1** — the product-service EAN lookup already returns the
-group ids. Documented here only as the fallback if a minimal add-row `article`
-proves insufficient (its response envelope was not captured).
+### Article search (observed, NOT used) — `GET .../sverige/digx/shoppinglistarticlesearch/v1/search?query=<q>`
+The name autocomplete the web app runs before a manual add. Returns catalog
+articles carrying `id`, `name`, `productEan`, `articleGroupId`,
+`expandedArticleGroupId`, `articleGroupName`, `expandedArticleGroupName`,
+store-format categories (+ `_id` like `"shoppingarticle_11103"`).
+We **do not use it**: it matches on product *name*, not EAN (searching by EAN was
+confirmed not to work), and the barcode flow already has the EAN → uses the
+product-service lookup below.
 
 ### Add a row (Phase 1) — `POST {SHOPPING_LIST_BASE}/list/{listId}/row`
 Request (the `article` object below is what the web app sent from a search hit;
@@ -2574,6 +2575,9 @@ GUID under `/row/`, not `/list/{id}/`). Response = updated row.
 No request body.
 
 ### Product lookup by EAN (Phase 1) — `GET {PRODUCT_URL}/{ean}`
-`PRODUCT_URL = .../sverige/digx/mobile/productservice/v1/product`. From `ica-mcp`;
-returns `gtin`, `name`, `articleId`, `articleGroupId`, `expandedArticleGroupId`
-(200) or 404 when unknown. **Exact shape to be confirmed at smoke test.**
+`PRODUCT_URL = .../sverige/digx/mobile/productservice/v1/product`. The confirmed
+EAN endpoint (from `ica-mcp`; user confirmed search-by-EAN does not work). Known
+fields include `gtin`, `name`, `articleId`, `articleGroupId`,
+`expandedArticleGroupId` (200) or 404 when unknown. The **full response is kept**
+in `Product.raw` and passed through on add. **Exact/complete shape to be captured
+at smoke test** (note whether store-format category fields are present).
