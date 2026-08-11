@@ -6,6 +6,7 @@ This module MUST NOT import from `homeassistant`.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import re
@@ -89,6 +90,24 @@ def _query_value(location: str, key: str) -> str:
     return values[0]
 
 
+async def _raise_on_error_status(resp: aiohttp.ClientResponse) -> None:
+    """Map a non-2xx/3xx response onto our exception hierarchy.
+
+    400/401/403 mean bad credentials or a rejected grant (e.g. ``invalid_grant``
+    on refresh) -> IcaAuthError. Anything else (5xx, unexpected 4xx) is treated
+    as a transport/server problem -> IcaConnectionError. A short body snippet is
+    included so the underlying OAuth error (if any) is visible in logs.
+    """
+    if resp.status < 400:
+        return
+    body = (await resp.text()).strip().replace("\n", " ")
+    snippet = body[:200]
+    message = f"HTTP {resp.status} from {resp.url}: {snippet}"
+    if resp.status in (400, 401, 403):
+        raise IcaAuthError(message)
+    raise IcaConnectionError(message)
+
+
 class IcaAuth:
     """Performs and refreshes ICA authentication over one aiohttp session."""
 
@@ -101,6 +120,7 @@ class IcaAuth:
         self._session = session
         self._token = token
         self._token_updated = token_updated
+        self._refresh_lock = asyncio.Lock()
 
     @property
     def token(self) -> IcaToken | None:
@@ -110,7 +130,11 @@ class IcaAuth:
         if self._token is None:
             raise IcaAuthError("Not authenticated; call login() first")
         if self._token.is_expired:
-            await self._refresh()
+            async with self._refresh_lock:
+                # Re-check inside the lock: a concurrent caller may have
+                # already refreshed while we were waiting for it.
+                if self._token.is_expired:
+                    await self._refresh()
         return self._token.access_token
 
     async def login(self, personnummer: str, password: str) -> IcaToken:
@@ -197,7 +221,7 @@ class IcaAuth:
             expires_at=datetime.now(UTC) + timedelta(seconds=int(data["expires_in"])),
             client_id=self._token.client_id,
             client_secret=self._token.client_secret,
-            scope=self._token.scope,
+            scope=data.get("scope", self._token.scope),
         )
         await self._notify(self._token)
 
@@ -222,8 +246,22 @@ class IcaAuth:
             headers={"User-Agent": USER_AGENT},
             allow_redirects=False,
         ) as resp:
+            await _raise_on_error_status(resp)
             location = resp.headers.get("Location", "")
-        return _query_value(location, "state")
+        state = _query_value(location, "state")
+
+        # Follow the redirect (loads the Curity login page and establishes its
+        # session cookie on `self._session`) before posting credentials, matching
+        # upstream (kanylbullen/ica-mcp client.py `_full_login`):
+        #   state = self._qs(r.headers["Location"], "state")
+        #   self.session.get(r.headers["Location"], timeout=30).raise_for_status()
+        async with self._session.get(
+            location,
+            headers={"User-Agent": USER_AGENT},
+        ) as redirect_resp:
+            await _raise_on_error_status(redirect_resp)
+
+        return state
 
     async def _login_form(self, personnummer: str, password: str) -> str:
         async with self._session.post(
@@ -247,6 +285,7 @@ class IcaAuth:
             headers={"User-Agent": USER_AGENT},
             allow_redirects=False,
         ) as resp:
+            await _raise_on_error_status(resp)
             location = resp.headers.get("Location", "")
         return _query_value(location, "code")
 
@@ -258,6 +297,7 @@ class IcaAuth:
     ) -> dict[str, Any]:
         merged = {"User-Agent": USER_AGENT, **(headers or {})}
         async with self._session.post(url, data=data, headers=merged) as resp:
+            await _raise_on_error_status(resp)
             payload: dict[str, Any] = await resp.json()
             return payload
 
@@ -269,5 +309,6 @@ class IcaAuth:
     ) -> dict[str, Any]:
         merged = {"User-Agent": USER_AGENT, **(headers or {})}
         async with self._session.post(url, json=data, headers=merged) as resp:
+            await _raise_on_error_status(resp)
             payload: dict[str, Any] = await resp.json()
             return payload
