@@ -39,9 +39,19 @@ integration.
 
 ## 2. Context & references
 
+- **Target API (confirmed):** the **ICA.se web** shopping-list service at
+  `https://apimgw-pub.ica.se/sverige/digx/shopping-list/v1/api/...` (read endpoint
+  `GET .../list/all`). This is a *different service on the same gateway* as
+  ica-mcp's mobile service (`.../digx/mobile/shoppinglistservice/v1/...`); it
+  returns richer rows with nested `article.group` / `article.extendedGroup`
+  category data, which is what we want. Same Bearer token / gateway, so the auth
+  flow below is unchanged. Product lookup still uses the product service
+  (`.../digx/mobile/productservice/v1/product/{ean}`).
 - `kanylbullen/ica-mcp` — Python MCP server; has `get_product` (EAN lookup),
   `add_product_to_shopping_list`, list add/check/uncheck/remove. Source of the
-  product-lookup approach. Auth itself was ported from `ha-ica-todo`.
+  **auth flow** and the **product-lookup** approach (its *mobile* shopping-list
+  endpoints/shape are NOT what we use — see target API above). Auth itself was
+  ported from `ha-ica-todo`.
 - `LazyTarget/ha-ica-todo` — early-stage HA integration with the same
   personnummer/password auth and a shopping-list concept. Source of the HA auth /
   config-flow / todo approach.
@@ -87,19 +97,33 @@ committing to that overhead now.
 
 ### 4.1 API client (`api/`)
 
-Public surface (all `async`):
+Targets the **web shopping-list API** (`.../digx/shopping-list/v1/api/...`) for
+list operations and the **product service** for EAN lookup. Public surface (all
+`async`):
 
 - `async login(personnummer, password) -> Session` — full DCR + PKCE + credential
   flow; returns/persists tokens.
 - `async ensure_token()` — refresh if expired.
-- `get_product(ean) -> Product | None` — EAN/GTIN lookup; `None` if unknown.
-- `get_lists() -> list[ShoppingList]`
-- `get_list(list_id) -> ShoppingList` (items included)
-- `add_item(list_id, text) -> Item`
-- `remove_item(list_id, item_id) -> None`
-- `set_checked(list_id, item_id, checked: bool) -> None`
+- `get_product(ean) -> Product | None` — EAN/GTIN lookup via product service;
+  `None` if unknown. Returns name + `article_id` + `article_group_id` +
+  `extended_article_group_id`.
+- `get_lists() -> list[ShoppingList]` — `GET .../list/all` (returns lists with rows).
+- `add_item(list_id, text, article=None) -> Item` — add a row; when `article` is
+  supplied (from a barcode lookup) attach its group id(s) so ICA files the row in
+  the correct category. *(exact write endpoint + payload pending browser capture.)*
+- `remove_item(list_id, item_id) -> None` — *(pending capture.)*
+- `set_checked(list_id, item_id, checked: bool) -> None` — *(pending capture.)*
 
-Typed models (`dataclass`/`TypedDict`): `Product`, `ShoppingList`, `Item`. Custom
+**Data model (web dialect, from the real response):** a list is
+`{id (GUID), name, comment, sortingStore, rows[], shoppingListId (int),
+householdId, secureId}`; a row is `{id (GUID), text, isStriked (bool),
+order, quantity: {amount, unit} | null, article: {id, name, ean,
+group: {id, name}, extendedGroup: {id, name}}, shoppingListRowId (int)}`.
+Category *names* arrive `null` in the list payload; we do **not** resolve them
+(see §7 — "correct in the ICA app" only).
+
+Typed models (`dataclass`/`TypedDict`): `Product`, `ShoppingList`, `Item`
+(+ nested `Article`/`ArticleGroup`). Custom
 exception types: `IcaAuthError`, `IcaConnectionError`, `IcaGatewayBlockedError`
 (non-Swedish IP), `IcaError` (base). Token cache injected via a small storage
 callback so the client stays HA-free but HA can persist via its Store helper.
@@ -123,7 +147,8 @@ receive structured feedback to drive its display/buzzer.
 ### `ica.lookup_product`
 - **In:** `barcode` (string, EAN/GTIN).
 - **Does:** product lookup only; no list mutation.
-- **Returns:** `{ found: bool, name: str | None, ean: str, brand: str | None }`.
+- **Returns:** `{ found: bool, name: str | None, ean: str }`. *(No `brand` — the
+  product response exposes no reliable brand field; see plan executor notes.)*
 
 ### `ica.add_item`
 - **In:** `name` (string, Swedish item text), `list` (optional; default list if omitted).
@@ -132,8 +157,10 @@ receive structured feedback to drive its display/buzzer.
 
 ### `ica.scan_barcode` (combined — the path the scanner uses)
 - **In:** `barcode` (string), `list` (optional).
-- **Does:** `lookup_product` → if found, add product name (deduped); if **not
-  found**, add the raw EAN flagged, e.g. `"Okänd vara <ean>"`.
+- **Does:** `lookup_product` → if found, add the product name (deduped) **with its
+  article group id(s) attached** so ICA files it in the correct category; if **not
+  found**, add the raw EAN flagged, e.g. `"Okänd vara <ean>"` (no article; ICA's
+  server-side text matching may still classify it).
 - **Returns:** `{ found: bool, added: bool, name: str, ean: str }` so the device
   shows the product name + ✓, or a "not found" warning for a miss.
 
@@ -142,9 +169,9 @@ receive structured feedback to drive its display/buzzer.
 ```
 ESP32 reads EAN
   -> ESPHome fires HA service `ica.scan_barcode` (direct call or via automation)
-    -> API client get_product(ean)
+    -> API client get_product(ean)  # -> name + article_id + article_group_id(s)
       -> coordinator in-memory list -> dedupe check (merge, no count)
-        -> add_item if new (found name, or raw "Okänd vara <ean>" if miss)
+        -> add_item if new: found -> name + attached article group; miss -> "Okänd vara <ean>"
           -> service returns response {found, added, name, ean}
             -> device shows name + ✓ or "not found" warning
     -> coordinator.async_request_refresh() so HA reflects the change immediately
@@ -170,6 +197,11 @@ HA-side write for a snappy UI.
 - **Lookup miss:** never dropped — add raw EAN flagged (`Okänd vara <ean>`) and set
   `found=false` in the response so the device can warn. *(not an error)*
 - **Duplicate scans:** merge, no count — dedupe by product name; add once if new.
+- **Article groups / categories:** on a *found* scan, attach the product's article
+  group id(s) (`article.group.id` / `article.extendedGroup.id`, from the product
+  lookup) to the new row so the item lands in the correct ICA category. Category
+  **names are NOT surfaced in Home Assistant** — "correct in the ICA app" is the
+  goal; we do not fetch/cache the article-group name reference.
 - **Device feedback:** services return structured response data
   (`SupportsResponse.OPTIONAL`).
 - **Language / i18n:** code and comments in **English**. The **UI is fully
