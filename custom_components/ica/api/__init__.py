@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .client import IcaClient
 from .exceptions import (
     IcaAuthError,
     IcaConnectionError,
@@ -12,6 +13,7 @@ from .models import Product, ShoppingList, ShoppingListItem
 
 __all__ = [
     "IcaAuthError",
+    "IcaClient",
     "IcaConnectionError",
     "IcaError",
     "IcaGatewayBlockedError",

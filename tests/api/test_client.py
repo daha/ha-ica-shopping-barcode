@@ -1,0 +1,159 @@
+"""Tests for the ICA API client (mocked HTTP)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import aiohttp
+import pytest
+from aioresponses import CallbackResult, aioresponses
+from custom_components.ica.api import const as c
+from custom_components.ica.api.auth import IcaAuth, IcaToken
+from custom_components.ica.api.client import IcaClient
+from custom_components.ica.api.exceptions import IcaGatewayBlockedError
+
+
+def _fresh_token() -> IcaToken:
+    return IcaToken(
+        "access",
+        "refresh",
+        datetime.now(UTC) + timedelta(hours=1),
+        "cid",
+        "sec",
+        "scope",
+    )
+
+
+def _make_client(session: aiohttp.ClientSession) -> IcaClient:
+    return IcaClient(session, IcaAuth(session, token=_fresh_token()))
+
+
+async def test_get_product_found() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(
+                f"{c.PRODUCT_URL}/7310865000293",
+                payload={
+                    "gtin": "7310865000293",
+                    "name": "mjölk",
+                    "articleId": 11103,
+                    "articleGroupId": 10,
+                    "expandedArticleGroupId": 10,
+                },
+            )
+            product = await client.get_product("7310865000293")
+    assert product is not None
+    assert product.name == "mjölk"
+    assert product.article_group_id == 10
+
+
+async def test_get_product_not_found_returns_none() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(f"{c.PRODUCT_URL}/000", status=404)
+            product = await client.get_product("000")
+    assert product is None
+
+
+async def test_get_lists() -> None:
+    # GET .../list/all returns a bare JSON array of lists.
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(
+                f"{c.SHOPPING_LIST_BASE}/list/all",
+                payload=[
+                    {
+                        "id": "G1",
+                        "name": "Att handla",
+                        "rows": [{"id": "R1", "text": "banan", "isStriked": False}],
+                    },
+                    {"id": "G2", "name": "Fest", "rows": []},
+                ],
+            )
+            lists = await client.get_lists()
+    assert [x.name for x in lists] == ["Att handla", "Fest"]
+    assert lists[0].id == "G1"
+    assert lists[0].items[0].text == "banan"
+
+
+async def test_get_list_filters_by_id() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(
+                f"{c.SHOPPING_LIST_BASE}/list/all",
+                payload=[
+                    {
+                        "id": "G1",
+                        "name": "Att handla",
+                        "rows": [{"id": "R1", "text": "mjölk", "isStriked": False}],
+                    }
+                ],
+            )
+            lst = await client.get_list("G1")
+    assert lst.items[0].text == "mjölk"
+
+
+async def test_add_item_with_article_posts_row() -> None:
+    captured: dict[str, Any] = {}
+
+    def _cb(url: Any, **kwargs: Any) -> CallbackResult:
+        captured.update(kwargs.get("json") or {})
+        return CallbackResult(
+            status=200,
+            payload={
+                "id": "NEWGUID",
+                "text": "mjölk",
+                "isStriked": False,
+                "article": {
+                    "id": 11103,
+                    "group": {"id": 10},
+                    "extendedGroup": {"id": 10},
+                },
+            },
+        )
+
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.post(f"{c.SHOPPING_LIST_BASE}/list/G1/row", callback=_cb)
+            item = await client.add_item(
+                "G1", "mjölk", article={"id": 11103, "articleGroupId": 10}
+            )
+    assert captured["text"] == "mjölk"
+    assert captured["isStriked"] is False
+    assert captured["quantity"] == {}
+    assert captured["article"]["articleGroupId"] == 10
+    assert item.text == "mjölk"
+    assert item.article_group_id == 10
+
+
+async def test_add_item_free_text_omits_article() -> None:
+    captured: dict[str, Any] = {}
+
+    def _cb(url: Any, **kwargs: Any) -> CallbackResult:
+        captured.update(kwargs.get("json") or {})
+        return CallbackResult(
+            status=200, payload={"id": "G", "text": "Ketchup Heinz", "isStriked": False}
+        )
+
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.post(f"{c.SHOPPING_LIST_BASE}/list/G1/row", callback=_cb)
+            item = await client.add_item("G1", "Ketchup Heinz")
+    assert "article" not in captured
+    assert item.text == "Ketchup Heinz"
+
+
+async def test_gateway_block_raises() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=403)
+            with pytest.raises(IcaGatewayBlockedError):
+                await client.get_lists()
