@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
 
 from .auth import IcaAuth
 from .const import PRODUCT_URL, SHOPPING_LIST_BASE, USER_AGENT
-from .exceptions import IcaConnectionError, IcaError, IcaGatewayBlockedError
+from .exceptions import (
+    IcaAuthError,
+    IcaConnectionError,
+    IcaError,
+    IcaGatewayBlockedError,
+)
 from .models import Product, ShoppingList, ShoppingListItem
 
 
@@ -71,17 +75,12 @@ class IcaClient:
                 if resp.status == 404 and allow_404:
                     return None
                 if resp.status == 401 and _retry:
-                    token = self._auth.token
-                    if token is not None:
-                        # Force a refresh, then retry the request exactly once.
-                        token.expires_at = datetime.now(UTC)
+                    self._auth.invalidate_token()
                     return await self._request(
-                        method,
-                        url,
-                        json=json,
-                        allow_404=allow_404,
-                        _retry=False,
+                        method, url, json=json, allow_404=allow_404, _retry=False
                     )
+                if resp.status == 401:
+                    raise IcaAuthError("ICA rejected the access token (401)")
                 if resp.status == 403:
                     raise IcaGatewayBlockedError(
                         "ICA gateway returned 403 (non-Swedish IP or blocked)"

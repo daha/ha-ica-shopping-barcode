@@ -126,6 +126,11 @@ class IcaAuth:
     def token(self) -> IcaToken | None:
         return self._token
 
+    def invalidate_token(self) -> None:
+        """Force the next access-token request to refresh (marks it expired)."""
+        if self._token is not None:
+            self._token.expires_at = datetime.now(UTC)
+
     async def async_get_access_token(self) -> str:
         if self._token is None:
             raise IcaAuthError("Not authenticated; call login() first")

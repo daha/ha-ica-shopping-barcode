@@ -11,7 +11,11 @@ from aioresponses import CallbackResult, aioresponses
 from custom_components.ica.api import const as c
 from custom_components.ica.api.auth import IcaAuth, IcaToken
 from custom_components.ica.api.client import IcaClient
-from custom_components.ica.api.exceptions import IcaGatewayBlockedError
+from custom_components.ica.api.exceptions import (
+    IcaAuthError,
+    IcaError,
+    IcaGatewayBlockedError,
+)
 
 
 def _fresh_token() -> IcaToken:
@@ -156,4 +160,64 @@ async def test_gateway_block_raises() -> None:
         with aioresponses() as mock:
             mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=403)
             with pytest.raises(IcaGatewayBlockedError):
+                await client.get_lists()
+
+
+async def test_401_triggers_refresh_and_retry() -> None:
+    async with aiohttp.ClientSession() as session:
+        auth = IcaAuth(session, token=_fresh_token())
+        client = IcaClient(session, auth)
+        with aioresponses() as mock:
+            mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=401)
+            mock.post(
+                c.TOKEN_ENDPOINT,
+                payload={
+                    "access_token": "refreshed",
+                    "refresh_token": "r2",
+                    "expires_in": 900,
+                },
+            )
+            mock.get(
+                f"{c.SHOPPING_LIST_BASE}/list/all",
+                payload=[{"id": "G1", "name": "A", "rows": []}],
+            )
+            lists = await client.get_lists()
+    assert [x.name for x in lists] == ["A"]
+    assert auth.token is not None
+    assert auth.token.access_token == "refreshed"
+
+
+async def test_persistent_401_raises_auth_error() -> None:
+    async with aiohttp.ClientSession() as session:
+        auth = IcaAuth(session, token=_fresh_token())
+        client = IcaClient(session, auth)
+        with aioresponses() as mock:
+            mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=401)
+            mock.post(
+                c.TOKEN_ENDPOINT,
+                payload={"access_token": "r", "refresh_token": "r2", "expires_in": 900},
+            )
+            mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=401)
+            with pytest.raises(IcaAuthError):
+                await client.get_lists()
+
+
+async def test_get_list_not_found_raises() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(
+                f"{c.SHOPPING_LIST_BASE}/list/all",
+                payload=[{"id": "OTHER", "name": "x", "rows": []}],
+            )
+            with pytest.raises(IcaError):
+                await client.get_list("G1")
+
+
+async def test_generic_server_error_raises_ica_error() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=500, body="boom")
+            with pytest.raises(IcaError):
                 await client.get_lists()
