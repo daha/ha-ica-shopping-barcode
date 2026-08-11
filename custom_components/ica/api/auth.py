@@ -270,8 +270,10 @@ class IcaAuth:
             headers={"User-Agent": USER_AGENT},
         ) as resp:
             html = await resp.text()
-            if resp.status >= 400:
+            if resp.status in (400, 401, 403):
                 raise IcaAuthError("Invalid personnummer or password")
+            if resp.status >= 400:
+                raise IcaConnectionError(f"Login request failed: HTTP {resp.status}")
         match = _TOKEN_RE.search(html)
         if not match:
             raise IcaAuthError("Login failed: no SSO token in response")

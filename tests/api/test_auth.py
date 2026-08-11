@@ -10,7 +10,7 @@ import pytest
 from aioresponses import aioresponses
 from custom_components.ica.api import const as c
 from custom_components.ica.api.auth import IcaAuth, IcaToken
-from custom_components.ica.api.exceptions import IcaAuthError
+from custom_components.ica.api.exceptions import IcaAuthError, IcaConnectionError
 
 # `_authorize_get`/`_authorize_post` attach query params via `params=`, so
 # aioresponses' exact-URL matching needs a pattern rather than the bare endpoint.
@@ -160,3 +160,21 @@ async def test_login_full_flow() -> None:
     assert token.scope == "myscope"
     assert auth.token is token
     assert updated and updated[-1].access_token == "final-access"
+
+
+async def test_login_form_server_error_raises_connection_error() -> None:
+    async with aiohttp.ClientSession() as session:
+        auth = IcaAuth(session)
+        with aioresponses() as mock:
+            mock.post(c.LOGIN_ENDPOINT, status=503, body="upstream down")
+            with pytest.raises(IcaConnectionError):
+                await auth._login_form("199001010000", "secret")
+
+
+async def test_login_form_bad_credentials_raises_auth_error() -> None:
+    async with aiohttp.ClientSession() as session:
+        auth = IcaAuth(session)
+        with aioresponses() as mock:
+            mock.post(c.LOGIN_ENDPOINT, status=401, body="nope")
+            with pytest.raises(IcaAuthError):
+                await auth._login_form("199001010000", "wrong")
