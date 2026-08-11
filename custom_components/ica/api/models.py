@@ -26,28 +26,36 @@ class Product:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Product":
-        # `expandedArticleGroupId` falls back to `articleGroupId` when absent.
         group = data.get("articleGroupId")
+        ean = data.get("gtin")
+        if ean is None:
+            ean = data.get("productEan")
+        article_id = data.get("articleId")
+        if article_id is None:
+            article_id = data.get("id")
         return cls(
             name=data["name"],
-            ean=data.get("gtin") or data.get("productEan"),
-            article_id=data.get("articleId") or data.get("id"),
+            ean=ean,
+            article_id=article_id,
             article_group_id=group,
             extended_article_group_id=data.get("expandedArticleGroupId", group),
-            raw=data,
+            raw=dict(data),
         )
 
     def to_row_article(self) -> dict[str, Any]:
         """Return the full `article` object for an add-row request.
 
         Passes through EVERY field from the lookup (store-format categories,
-        group names, etc.) and only *ensures* the keys the add endpoint needs
+        group names, etc.) and ensures the keys the add endpoint needs
         (`id`, `productEan`, `articleGroupId`, `expandedArticleGroupId`) are
-        present — never overriding what the payload already carries.
+        present whenever we have a value for them — never overriding what the
+        payload already carries.
         """
         article = dict(self.raw)
-        article.setdefault("id", self.article_id)
-        article.setdefault("productEan", self.ean)
+        if self.article_id is not None:
+            article.setdefault("id", self.article_id)
+        if self.ean is not None:
+            article.setdefault("productEan", self.ean)
         if self.article_group_id is not None:
             article.setdefault("articleGroupId", self.article_group_id)
         if self.extended_article_group_id is not None:

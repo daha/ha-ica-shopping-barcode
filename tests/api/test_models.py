@@ -117,3 +117,17 @@ def test_shopping_list_from_api_with_rows() -> None:
     assert lst.name == "Att handla"
     assert [i.text for i in lst.items] == ["banan", "mjölk"]
     assert lst.items[1].is_checked is True
+
+
+def test_product_to_row_article_omits_keys_without_values() -> None:
+    # A Product with no ids yields an article that omits those keys (not null).
+    article = Product("okänt", None, None, None, None).to_row_article()
+    assert "id" not in article
+    assert "productEan" not in article
+    assert "articleGroupId" not in article
+    assert "expandedArticleGroupId" not in article
+
+
+def test_shopping_list_from_api_without_rows() -> None:
+    lst = ShoppingList.from_api({"id": "G1", "name": "Tom"})
+    assert lst.items == []
