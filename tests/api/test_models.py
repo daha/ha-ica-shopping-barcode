@@ -33,7 +33,12 @@ def test_product_from_api() -> None:
 def test_product_from_api_search_shape() -> None:
     # The alternative (article-search) shape uses `id`/`productEan`.
     product = Product.from_api(
-        {"id": 11103, "name": "mjölk", "productEan": "7310865000293", "articleGroupId": 10}
+        {
+            "id": 11103,
+            "name": "mjölk",
+            "productEan": "7310865000293",
+            "articleGroupId": 10,
+        }
     )
     assert product.article_id == 11103
     assert product.ean == "7310865000293"

@@ -12,7 +12,7 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -49,7 +49,7 @@ class IcaToken:
 
     @property
     def is_expired(self) -> bool:
-        return datetime.now(timezone.utc) >= (self.expires_at - _EXPIRY_MARGIN)
+        return datetime.now(UTC) >= (self.expires_at - _EXPIRY_MARGIN)
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -62,7 +62,7 @@ class IcaToken:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, str]) -> "IcaToken":
+    def from_dict(cls, data: dict[str, str]) -> IcaToken:
         return cls(
             access_token=data["access_token"],
             refresh_token=data["refresh_token"],
@@ -166,8 +166,7 @@ class IcaAuth:
         token = IcaToken(
             access_token=tok["access_token"],
             refresh_token=tok["refresh_token"],
-            expires_at=datetime.now(timezone.utc)
-            + timedelta(seconds=int(tok["expires_in"])),
+            expires_at=datetime.now(UTC) + timedelta(seconds=int(tok["expires_in"])),
             client_id=client_id,
             client_secret=client_secret,
             scope=scope,
@@ -195,8 +194,7 @@ class IcaAuth:
         self._token = IcaToken(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token", self._token.refresh_token),
-            expires_at=datetime.now(timezone.utc)
-            + timedelta(seconds=int(data["expires_in"])),
+            expires_at=datetime.now(UTC) + timedelta(seconds=int(data["expires_in"])),
             client_id=self._token.client_id,
             client_secret=self._token.client_secret,
             scope=self._token.scope,

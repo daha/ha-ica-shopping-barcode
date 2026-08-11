@@ -25,7 +25,7 @@ class Product:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Product":
+    def from_api(cls, data: dict[str, Any]) -> Product:
         group = data.get("articleGroupId")
         ean = data.get("gtin")
         if ean is None:
@@ -59,9 +59,7 @@ class Product:
         if self.article_group_id is not None:
             article.setdefault("articleGroupId", self.article_group_id)
         if self.extended_article_group_id is not None:
-            article.setdefault(
-                "expandedArticleGroupId", self.extended_article_group_id
-            )
+            article.setdefault("expandedArticleGroupId", self.extended_article_group_id)
         return article
 
 
@@ -75,7 +73,7 @@ class ShoppingListItem:
     article_group_id: int | None = None
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "ShoppingListItem":
+    def from_api(cls, data: dict[str, Any]) -> ShoppingListItem:
         article = data.get("article") or {}
         group = article.get("group") or {}
         return cls(
@@ -95,7 +93,7 @@ class ShoppingList:
     items: list[ShoppingListItem] = field(default_factory=list)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "ShoppingList":
+    def from_api(cls, data: dict[str, Any]) -> ShoppingList:
         rows = data.get("rows") or []
         return cls(
             id=data["id"],

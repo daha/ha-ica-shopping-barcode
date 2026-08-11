@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiohttp
-import pytest
 from aioresponses import aioresponses
-
 from custom_components.ica.api import const as c
 from custom_components.ica.api.auth import IcaAuth, IcaToken
 
 
 def _future() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=1)
+    return datetime.now(UTC) + timedelta(hours=1)
 
 
 def _past() -> datetime:
-    return datetime.now(timezone.utc) - timedelta(hours=1)
+    return datetime.now(UTC) - timedelta(hours=1)
 
 
 def test_token_is_expired() -> None:

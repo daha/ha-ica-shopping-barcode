@@ -18,15 +18,14 @@ REDIRECT_URI = "icacurity://app"
 ACR = "urn:se:curity:authentication:html-form:IcaCustomers"
 
 USER_AGENT = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
-    "AppleWebKit/605.1.15"
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"
 )
 
 # Web shopping-list service (ica.se) — the API our account actually uses.
 #   list all:   GET    {SHOPPING_LIST_BASE}/list/all
 #   add row:    POST   {SHOPPING_LIST_BASE}/list/{list_id}/row
-#   update row: PUT    {SHOPPING_LIST_BASE}/row/{row_id}     (Phase 2: check/uncheck; body = full row)
-#   delete row: DELETE {SHOPPING_LIST_BASE}/row/{row_id}     (Phase 2: no body)
+#   update row: PUT    {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: check; full-row body)
+#   delete row: DELETE {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: no body)
 SHOPPING_LIST_BASE = f"{API_BASE}/sverige/digx/shopping-list/v1/api"
 # Product service (EAN/GTIN lookup) — GET {PRODUCT_URL}/{ean}.
 # Returns name + articleId + articleGroupId + expandedArticleGroupId, i.e.
