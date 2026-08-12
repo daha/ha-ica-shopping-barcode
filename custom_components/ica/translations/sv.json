@@ -1,0 +1,92 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ICA-konto",
+        "description": "Logga in med ditt ICA-personnummer och lösenord.",
+        "data": {
+          "personnummer": "Personnummer (12 siffror)",
+          "password": "Lösenord"
+        }
+      },
+      "pick_list": {
+        "title": "Standardinköpslista",
+        "data": {
+          "list_id": "Inköpslista"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Autentisera ICA igen",
+        "description": "Din ICA-session har gått ut. Ange ditt lösenord igen.",
+        "data": {
+          "personnummer": "Personnummer (12 siffror)",
+          "password": "Lösenord"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Felaktigt personnummer eller lösenord.",
+      "cannot_connect": "Kunde inte nå ICA. Kontrollera anslutningen (svensk IP krävs)."
+    },
+    "abort": {
+      "already_configured": "Den här inköpslistan är redan konfigurerad.",
+      "reauth_successful": "Återautentiseringen lyckades."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ICA-inställningar",
+        "data": {
+          "scan_interval": "Synkroniseringsintervall (minuter)"
+        }
+      }
+    }
+  },
+  "issues": {
+    "gateway_blocked": {
+      "title": "ICA blockerar anrop",
+      "description": "ICA:s API avvisade anropen, oftast för att Home Assistant inte ansluter från en svensk IP-adress. ICA tillåter endast anslutningar från Sverige."
+    }
+  },
+  "services": {
+    "lookup_product": {
+      "name": "Slå upp produkt",
+      "description": "Slå upp en produkt via streckkod (EAN/GTIN) utan att ändra någon lista.",
+      "fields": {
+        "barcode": {
+          "name": "Streckkod",
+          "description": "Den skannade EAN/GTIN-koden."
+        }
+      }
+    },
+    "add_item": {
+      "name": "Lägg till vara",
+      "description": "Lägg till en vara i en inköpslista (hoppas över om den redan finns).",
+      "fields": {
+        "name": {
+          "name": "Namn",
+          "description": "Varans text."
+        },
+        "list": {
+          "name": "Lista",
+          "description": "Mållistans titel. Standard är den konfigurerade listan."
+        }
+      }
+    },
+    "scan_barcode": {
+      "name": "Skanna streckkod",
+      "description": "Slå upp en streckkod och lägg till produkten i en inköpslista. Okända streckkoder läggs till som 'Okänd vara <ean>'.",
+      "fields": {
+        "barcode": {
+          "name": "Streckkod",
+          "description": "Den skannade EAN/GTIN-koden."
+        },
+        "list": {
+          "name": "Lista",
+          "description": "Mållistans titel. Standard är den konfigurerade listan."
+        }
+      }
+    }
+  }
+}

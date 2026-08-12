@@ -1,0 +1,92 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ICA account",
+        "description": "Sign in with your ICA personnummer and password.",
+        "data": {
+          "personnummer": "Personnummer (12 digits)",
+          "password": "Password"
+        }
+      },
+      "pick_list": {
+        "title": "Default shopping list",
+        "data": {
+          "list_id": "Shopping list"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate ICA",
+        "description": "Your ICA session expired. Enter your password again.",
+        "data": {
+          "personnummer": "Personnummer (12 digits)",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid personnummer or password.",
+      "cannot_connect": "Could not reach ICA. Check your connection (a Swedish IP is required)."
+    },
+    "abort": {
+      "already_configured": "This shopping list is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ICA options",
+        "data": {
+          "scan_interval": "Sync interval (minutes)"
+        }
+      }
+    }
+  },
+  "issues": {
+    "gateway_blocked": {
+      "title": "ICA is blocking requests",
+      "description": "ICA's API rejected requests, usually because Home Assistant is not connecting from a Swedish IP address. ICA only accepts connections from Sweden."
+    }
+  },
+  "services": {
+    "lookup_product": {
+      "name": "Look up product",
+      "description": "Look up a product by barcode (EAN/GTIN) without changing any list.",
+      "fields": {
+        "barcode": {
+          "name": "Barcode",
+          "description": "The scanned EAN/GTIN."
+        }
+      }
+    },
+    "add_item": {
+      "name": "Add item",
+      "description": "Add an item to a shopping list (skipped if already present).",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "The item text (in Swedish)."
+        },
+        "list": {
+          "name": "List",
+          "description": "Target list title. Defaults to the configured list."
+        }
+      }
+    },
+    "scan_barcode": {
+      "name": "Scan barcode",
+      "description": "Look up a barcode and add the product to a shopping list. Unknown barcodes are added as 'Okänd vara <ean>'.",
+      "fields": {
+        "barcode": {
+          "name": "Barcode",
+          "description": "The scanned EAN/GTIN."
+        },
+        "list": {
+          "name": "List",
+          "description": "Target list title. Defaults to the configured list."
+        }
+      }
+    }
+  }
+}
