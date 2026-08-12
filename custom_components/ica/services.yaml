@@ -1,0 +1,33 @@
+lookup_product:
+  fields:
+    barcode:
+      required: true
+      example: "7311041000000"
+      selector:
+        text:
+
+add_item:
+  fields:
+    name:
+      required: true
+      example: "Mjölk"
+      selector:
+        text:
+    list:
+      required: false
+      example: "Inköpslista"
+      selector:
+        text:
+
+scan_barcode:
+  fields:
+    barcode:
+      required: true
+      example: "7311041000000"
+      selector:
+        text:
+    list:
+      required: false
+      example: "Inköpslista"
+      selector:
+        text:
