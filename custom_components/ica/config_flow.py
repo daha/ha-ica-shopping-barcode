@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import IcaClient, IcaConnectionError
+from .api import IcaClient, IcaConnectionError, IcaError
 from .api.auth import IcaAuth, IcaToken
 from .api.exceptions import IcaAuthError
 from .const import (
@@ -62,6 +62,8 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except IcaConnectionError:
                 errors["base"] = "cannot_connect"
+            except IcaError:
+                errors["base"] = "cannot_connect"
             else:
                 self._lists = {x.id: x.name for x in lists}
                 return await self.async_step_pick_list()
@@ -106,6 +108,8 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
             except IcaAuthError:
                 errors["base"] = "invalid_auth"
             except IcaConnectionError:
+                errors["base"] = "cannot_connect"
+            except IcaError:
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(
