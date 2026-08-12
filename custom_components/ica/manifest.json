@@ -1,0 +1,13 @@
+{
+  "domain": "ica",
+  "name": "ICA Shopping List",
+  "codeowners": ["@davidhaglund"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/davidhaglund/barcode-ica-shopping-list",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/davidhaglund/barcode-ica-shopping-list/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
