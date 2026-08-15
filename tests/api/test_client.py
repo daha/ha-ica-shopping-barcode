@@ -16,6 +16,7 @@ from custom_components.ica.api.exceptions import (
     IcaError,
     IcaGatewayBlockedError,
 )
+from custom_components.ica.api.models import ShoppingListItem
 
 
 def _fresh_token() -> IcaToken:
@@ -270,3 +271,69 @@ async def test_generic_server_error_raises_ica_error() -> None:
             mock.get(f"{c.SHOPPING_LIST_BASE}/list/all", status=500, body="boom")
             with pytest.raises(IcaError):
                 await client.get_lists()
+
+
+async def test_update_item_puts_the_full_row() -> None:
+    captured: dict[str, Any] = {}
+
+    def _cb(url: Any, **kwargs: Any) -> CallbackResult:
+        captured.update(kwargs.get("json") or {})
+        return CallbackResult(
+            status=200,
+            payload={
+                "id": "R1",
+                "text": "mjölk",
+                "isStriked": True,
+                "article": {"id": 11103, "group": {"id": 10}},
+            },
+        )
+
+    item = ShoppingListItem.from_api(
+        {
+            "id": "R1",
+            "text": "mjölk",
+            "isStriked": False,
+            "order": -184,
+            "article": {"id": 11103, "group": {"id": 10}},
+            "shoppingListRowId": 1030857476,
+        }
+    )
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.put(f"{c.SHOPPING_LIST_BASE}/row/R1", callback=_cb)
+            result = await client.update_item(item, is_checked=True)
+    # The whole row goes back, not just the fields we model.
+    assert captured["isStriked"] is True
+    assert captured["article"] == {"id": 11103, "group": {"id": 10}}
+    assert captured["order"] == -184
+    assert captured["shoppingListRowId"] == 1030857476
+    assert result.is_checked is True
+
+
+async def test_update_item_renames() -> None:
+    captured: dict[str, Any] = {}
+
+    def _cb(url: Any, **kwargs: Any) -> CallbackResult:
+        captured.update(kwargs.get("json") or {})
+        return CallbackResult(
+            status=200, payload={"id": "R1", "text": "Mjölk", "isStriked": False}
+        )
+
+    item = ShoppingListItem.from_api({"id": "R1", "text": "mjolk", "isStriked": False})
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.put(f"{c.SHOPPING_LIST_BASE}/row/R1", callback=_cb)
+            result = await client.update_item(item, text="Mjölk")
+    assert captured["text"] == "Mjölk"
+    assert captured["isStriked"] is False
+    assert result.text == "Mjölk"
+
+
+async def test_remove_item_deletes_the_row() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.delete(f"{c.SHOPPING_LIST_BASE}/row/R1", status=204)
+            assert await client.remove_item("R1") is None

@@ -77,6 +77,30 @@ class IcaClient:
             raise IcaError(f"ICA API returned no data adding row to list {list_id}")
         return ShoppingListItem.from_api(data)
 
+    async def update_item(
+        self,
+        item: ShoppingListItem,
+        *,
+        text: str | None = None,
+        is_checked: bool | None = None,
+    ) -> ShoppingListItem:
+        """Update a row's text and/or checked state.
+
+        ICA REPLACES the row, so the complete payload is sent back with only
+        the requested fields changed — see `ShoppingListItem.to_updated_row`.
+        """
+        body = item.to_updated_row(text=text, is_checked=is_checked)
+        data = await self._request(
+            "PUT", f"{SHOPPING_LIST_BASE}/row/{item.id}", json=body
+        )
+        if data is None:
+            raise IcaError(f"ICA API returned no data updating row {item.id}")
+        return ShoppingListItem.from_api(data)
+
+    async def remove_item(self, item_id: str) -> None:
+        """Delete a row. The endpoint takes no body and returns no content."""
+        await self._request("DELETE", f"{SHOPPING_LIST_BASE}/row/{item_id}")
+
     async def _request(
         self,
         method: str,
