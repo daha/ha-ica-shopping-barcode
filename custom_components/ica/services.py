@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 import homeassistant.helpers.config_validation as cv
@@ -16,11 +15,10 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import issue_registry as ir
 
 from .api import Product, ShoppingList
-from .api.exceptions import IcaAuthError, IcaError, IcaGatewayBlockedError
-from .const import DOMAIN, ISSUE_GATEWAY_BLOCKED, UNKNOWN_ITEM_PREFIX
+from .const import DOMAIN, UNKNOWN_ITEM_PREFIX
+from .errors import map_ica_errors
 
 if TYPE_CHECKING:
     from . import IcaConfigEntry, IcaRuntimeData
@@ -54,34 +52,6 @@ def _get_entry(hass: HomeAssistant) -> IcaConfigEntry:
         if entry.state is ConfigEntryState.LOADED:
             return entry
     raise HomeAssistantError(translation_domain=DOMAIN, translation_key="not_set_up")
-
-
-@contextlib.asynccontextmanager
-async def _map_ica_errors(
-    hass: HomeAssistant, entry: IcaConfigEntry
-) -> AsyncIterator[None]:
-    """Map ICA API errors onto HA behavior: reauth, a repair issue, or a plain error."""
-    try:
-        yield
-    except IcaAuthError as err:
-        entry.async_start_reauth(hass)  # spec §9: hard 401 -> reauth
-        raise HomeAssistantError(
-            translation_domain=DOMAIN, translation_key="auth_failed"
-        ) from err
-    except IcaGatewayBlockedError as err:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            ISSUE_GATEWAY_BLOCKED,
-            is_fixable=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key=ISSUE_GATEWAY_BLOCKED,
-        )
-        raise HomeAssistantError(
-            translation_domain=DOMAIN, translation_key=ISSUE_GATEWAY_BLOCKED
-        ) from err
-    except IcaError as err:
-        raise HomeAssistantError(str(err)) from err
 
 
 async def _resolve_list(runtime: IcaRuntimeData, list_name: str | None) -> ShoppingList:
@@ -153,7 +123,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         ean = call.data[ATTR_BARCODE]
         entry = _get_entry(hass)
         runtime = entry.runtime_data
-        async with _map_ica_errors(hass, entry):
+        async with map_ica_errors(hass, entry):
             product = await runtime.client.get_product(ean)
             category = await _category_of(runtime, product)
         if product is None:
@@ -164,7 +134,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         name = call.data[ATTR_NAME]
         entry = _get_entry(hass)
         runtime = entry.runtime_data
-        async with _map_ica_errors(hass, entry):
+        async with map_ica_errors(hass, entry):
             target = await _resolve_list(runtime, call.data.get(ATTR_LIST))
             added = await _add_deduped(runtime, target, name)
         return {"added": added, "name": name}
@@ -173,7 +143,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         ean = call.data[ATTR_BARCODE]
         entry = _get_entry(hass)
         runtime = entry.runtime_data
-        async with _map_ica_errors(hass, entry):
+        async with map_ica_errors(hass, entry):
             product = await runtime.client.get_product(ean)
             target = await _resolve_list(runtime, call.data.get(ATTR_LIST))
             if product is not None:
