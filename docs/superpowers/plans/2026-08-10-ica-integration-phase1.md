@@ -19,7 +19,7 @@
 - **Dedupe = "merge, no count":** before adding, compare the candidate item text case-insensitively against current list item names; add only if absent.
 - **All new code fully type-annotated**, passes `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`, and `uv run pytest`.
 - **Credit upstream** (`kanylbullen/ica-mcp`, `LazyTarget/ha-ica-todo`, both MIT) in `README.md` and a `NOTICE` file.
-- **`codeowners`/GitHub URLs** use the placeholder handle `@davidhaglund` and repo `barcode-ica-shopping-list`; replace the handle with the real GitHub username if different (config value, set once in Task 1).
+- **`codeowners`/GitHub URLs** use the handle `@daha` and repo `ha-ica-shopping-barcode` (config values, set once in Task 5's `manifest.json`).
 - Commit after every task's tests pass.
 
 ---
@@ -1349,14 +1349,14 @@ PLATFORMS: list[str] = []  # Phase 2 adds "todo"
 ```json
 {
   "domain": "ica",
-  "name": "ICA Shopping List",
-  "codeowners": ["@davidhaglund"],
+  "name": "ICA Shopping List & Barcode",
+  "codeowners": ["@daha"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/davidhaglund/barcode-ica-shopping-list",
+  "documentation": "https://github.com/daha/ha-ica-shopping-barcode",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/davidhaglund/barcode-ica-shopping-list/issues",
+  "issue_tracker": "https://github.com/daha/ha-ica-shopping-barcode/issues",
   "requirements": [],
   "version": "0.1.0"
 }

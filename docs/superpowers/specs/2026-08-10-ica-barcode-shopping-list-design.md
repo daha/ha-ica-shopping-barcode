@@ -269,7 +269,7 @@ Repo is dual-natured: a `uv`-managed Python dev project at the root wrapping a
 HA-conventional integration package.
 
 ```
-barcode-ica-shopping-list/
+ha-ica-shopping-barcode/
 ├── custom_components/
 │   └── ica/
 │       ├── __init__.py
