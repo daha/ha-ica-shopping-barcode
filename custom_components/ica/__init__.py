@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import IcaClient
 from .api.auth import IcaAuth, IcaToken
@@ -20,7 +22,9 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import IcaDataUpdateCoordinator
-from .services import async_setup_services, async_unload_services
+from .services import async_setup_services
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 @dataclass
@@ -32,6 +36,12 @@ class IcaRuntimeData:
 
 
 type IcaConfigEntry = ConfigEntry[IcaRuntimeData]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the ICA integration (register services once, for its lifetime)."""
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: IcaConfigEntry) -> bool:
@@ -52,7 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: IcaConfigEntry) -> bool:
 
     interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     coordinator = IcaDataUpdateCoordinator(
-        hass, client, entry.data[CONF_LIST_ID], interval
+        hass, entry, client, entry.data[CONF_LIST_ID], interval
     )
     # first_refresh raises ConfigEntryNotReady / ConfigEntryAuthFailed itself
     # based on what the coordinator raised (UpdateFailed / ConfigEntryAuthFailed).
@@ -60,18 +70,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: IcaConfigEntry) -> bool:
 
     entry.runtime_data = IcaRuntimeData(client=client, coordinator=coordinator)
 
-    await async_setup_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: IcaConfigEntry) -> bool:
-    """Unload a config entry."""
-    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if not hass.config_entries.async_loaded_entries(DOMAIN):
-        async_unload_services(hass)
-    return unloaded
+    """Unload a config entry.
+
+    Services are registered once in `async_setup` and live for the
+    integration's lifetime — they are intentionally NOT unregistered here.
+    """
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: IcaConfigEntry) -> None:

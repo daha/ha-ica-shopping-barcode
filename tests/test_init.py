@@ -41,8 +41,9 @@ async def test_setup_and_unload(hass: HomeAssistant) -> None:
 
     assert entry.state is ConfigEntryState.LOADED
     coordinator = entry.runtime_data.coordinator
-    assert coordinator.has_item("mjölk") is True
-    assert coordinator.has_item("saknas") is False
+    assert coordinator.data is not None
+    assert coordinator.data.has_active_item("mjölk") is True
+    assert coordinator.data.has_active_item("saknas") is False
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert entry.state is ConfigEntryState.NOT_LOADED

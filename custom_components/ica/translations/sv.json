@@ -49,6 +49,23 @@
       "description": "ICA:s API avvisade anropen, oftast för att Home Assistant inte ansluter från en svensk IP-adress. ICA tillåter endast anslutningar från Sverige."
     }
   },
+  "exceptions": {
+    "not_set_up": {
+      "message": "ICA-integrationen är inte konfigurerad."
+    },
+    "unknown_list": {
+      "message": "Ingen ICA-lista med namnet \"{name}\" hittades."
+    },
+    "list_not_loaded": {
+      "message": "ICA-inköpslistan har inte laddats än."
+    },
+    "auth_failed": {
+      "message": "ICA avvisade anropet; återautentisering krävs."
+    },
+    "gateway_blocked": {
+      "message": "ICA blockerar anrop från detta nätverk."
+    }
+  },
   "services": {
     "lookup_product": {
       "name": "Slå upp produkt",

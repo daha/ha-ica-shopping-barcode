@@ -50,7 +50,8 @@ class IcaClient:
         data = await self._request(
             "POST", f"{SHOPPING_LIST_BASE}/list/{list_id}/row", json=body
         )
-        assert data is not None
+        if data is None:
+            raise IcaError(f"ICA API returned no data adding row to list {list_id}")
         return ShoppingListItem.from_api(data)
 
     async def _request(

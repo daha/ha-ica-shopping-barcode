@@ -49,6 +49,23 @@
       "description": "ICA's API rejected requests, usually because Home Assistant is not connecting from a Swedish IP address. ICA only accepts connections from Sweden."
     }
   },
+  "exceptions": {
+    "not_set_up": {
+      "message": "The ICA integration is not set up."
+    },
+    "unknown_list": {
+      "message": "No ICA list named \"{name}\"."
+    },
+    "list_not_loaded": {
+      "message": "The ICA shopping list has not loaded yet."
+    },
+    "auth_failed": {
+      "message": "ICA rejected the request; re-authentication is required."
+    },
+    "gateway_blocked": {
+      "message": "ICA is blocking requests from this network."
+    }
+  },
   "services": {
     "lookup_product": {
       "name": "Look up product",

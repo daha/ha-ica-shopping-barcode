@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+from custom_components.ica.api.exceptions import IcaError
 from custom_components.ica.api.models import (
     Product,
     ShoppingList,
@@ -136,3 +138,39 @@ def test_product_to_row_article_omits_keys_without_values() -> None:
 def test_shopping_list_from_api_without_rows() -> None:
     lst = ShoppingList.from_api({"id": "G1", "name": "Tom"})
     assert lst.items == []
+
+
+def test_has_active_item_ignores_checked_rows() -> None:
+    # C1: a struck-through ("bought") row must not shadow a re-add of the
+    # same name — only UNCHECKED rows count as "active".
+    lst = ShoppingList(
+        id="G1",
+        name="Inköpslista",
+        items=[
+            ShoppingListItem("R1", "Mjölk", True),
+            ShoppingListItem("R2", "Bröd", False),
+        ],
+    )
+    assert lst.has_active_item("mjölk") is False
+    assert lst.has_active_item("bröd") is True
+
+
+def test_has_active_item_no_match() -> None:
+    lst = ShoppingList(id="G1", name="Inköpslista", items=[])
+    assert lst.has_active_item("mjölk") is False
+
+
+def test_product_from_api_missing_name_raises_ica_error() -> None:
+    # C3: a malformed 200 must map to our own error hierarchy, not KeyError.
+    with pytest.raises(IcaError):
+        Product.from_api({"gtin": "123"})
+
+
+def test_shopping_list_item_from_api_missing_text_raises_ica_error() -> None:
+    with pytest.raises(IcaError):
+        ShoppingListItem.from_api({"id": "R1", "isStriked": False})
+
+
+def test_shopping_list_from_api_missing_id_raises_ica_error() -> None:
+    with pytest.raises(IcaError):
+        ShoppingList.from_api({"name": "Tom"})

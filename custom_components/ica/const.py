@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from homeassistant.const import Platform
+
 DOMAIN = "ica"
 
 CONF_PERSONNUMMER = "personnummer"
@@ -15,4 +17,6 @@ DEFAULT_SCAN_INTERVAL = 5  # minutes
 
 UNKNOWN_ITEM_PREFIX = "Okänd vara"
 
-PLATFORMS: list[str] = []  # Phase 2 adds "todo"
+PLATFORMS: list[Platform] = []  # Phase 2 adds Platform.TODO
+
+ISSUE_GATEWAY_BLOCKED = "gateway_blocked"

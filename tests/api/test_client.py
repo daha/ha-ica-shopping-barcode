@@ -154,6 +154,16 @@ async def test_add_item_free_text_omits_article() -> None:
     assert item.text == "Ketchup Heinz"
 
 
+async def test_add_item_no_content_raises_ica_error() -> None:
+    # S12: the internal guard (formerly a bare `assert`) raises IcaError.
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.post(f"{c.SHOPPING_LIST_BASE}/list/G1/row", status=204)
+            with pytest.raises(IcaError):
+                await client.add_item("G1", "mjölk")
+
+
 async def test_gateway_block_raises() -> None:
     async with aiohttp.ClientSession() as session:
         client = _make_client(session)

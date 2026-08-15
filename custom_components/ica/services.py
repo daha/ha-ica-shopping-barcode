@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+import contextlib
+from collections.abc import AsyncIterator, Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -14,9 +16,14 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import issue_registry as ir
 
-from .api import IcaClient, IcaError
-from .const import DOMAIN, UNKNOWN_ITEM_PREFIX
+from .api import ShoppingList
+from .api.exceptions import IcaAuthError, IcaError, IcaGatewayBlockedError
+from .const import DOMAIN, ISSUE_GATEWAY_BLOCKED, UNKNOWN_ITEM_PREFIX
+
+if TYPE_CHECKING:
+    from . import IcaConfigEntry, IcaRuntimeData
 
 SERVICE_LOOKUP_PRODUCT = "lookup_product"
 SERVICE_ADD_ITEM = "add_item"
@@ -34,85 +41,118 @@ _SCAN_SCHEMA = vol.Schema(
     {vol.Required(ATTR_BARCODE): cv.string, vol.Optional(ATTR_LIST): cv.string}
 )
 
-
-def _get_runtime(hass: HomeAssistant) -> Any:
-    """Return the runtime data of the single loaded ICA config entry."""
-    entries = [
-        e
-        for e in hass.config_entries.async_entries(DOMAIN)
-        if e.state is ConfigEntryState.LOADED
-    ]
-    if not entries:
-        raise HomeAssistantError("ICA integration is not set up")
-    return entries[0].runtime_data
+_ServiceHandler = Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]
 
 
-async def _resolve_list_id(runtime: Any, list_name: str | None) -> str:
-    """Return the id (GUID) of the target list (default if not named)."""
+def _get_entry(hass: HomeAssistant) -> IcaConfigEntry:
+    """Return the single loaded ICA config entry.
+
+    The manifest declares `single_config_entry`, so at most one ICA entry can
+    ever exist; the first LOADED one (if any) IS the entry.
+    """
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is ConfigEntryState.LOADED:
+            return entry
+    raise HomeAssistantError(translation_domain=DOMAIN, translation_key="not_set_up")
+
+
+@contextlib.asynccontextmanager
+async def _map_ica_errors(
+    hass: HomeAssistant, entry: IcaConfigEntry
+) -> AsyncIterator[None]:
+    """Map ICA API errors onto HA behavior: reauth, a repair issue, or a plain error."""
+    try:
+        yield
+    except IcaAuthError as err:
+        entry.async_start_reauth(hass)  # spec §9: hard 401 -> reauth
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="auth_failed"
+        ) from err
+    except IcaGatewayBlockedError as err:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_GATEWAY_BLOCKED,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=ISSUE_GATEWAY_BLOCKED,
+        )
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key=ISSUE_GATEWAY_BLOCKED
+        ) from err
+    except IcaError as err:
+        raise HomeAssistantError(str(err)) from err
+
+
+async def _resolve_list(runtime: IcaRuntimeData, list_name: str | None) -> ShoppingList:
+    """Return the target list, fetching `list/all` at most once."""
     if list_name is None:
-        return cast(str, runtime.coordinator.list_id)
-    client: IcaClient = runtime.client
-    for lst in await client.get_lists():
-        if lst.name.strip().casefold() == list_name.strip().casefold():
-            return lst.id
-    raise ServiceValidationError(f"No ICA list named '{list_name}'")
+        target = runtime.coordinator.data
+        if target is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="list_not_loaded"
+            )
+        return target
+    target_cf = list_name.strip().casefold()
+    for lst in await runtime.client.get_lists():
+        if lst.name.strip().casefold() == target_cf:
+            return lst
+    raise ServiceValidationError(
+        translation_domain=DOMAIN,
+        translation_key="unknown_list",
+        translation_placeholders={"name": list_name},
+    )
 
 
 async def _add_deduped(
-    runtime: Any, list_id: str, name: str, article: dict[str, Any] | None = None
+    runtime: IcaRuntimeData,
+    target: ShoppingList,
+    name: str,
+    article: dict[str, Any] | None = None,
 ) -> bool:
-    """Add an item unless a case-insensitive name match already exists.
+    """Add an item unless an UNCHECKED case-insensitive name match exists.
 
     Returns True if it was added, False if it was a duplicate.
     """
-    coordinator = runtime.coordinator
-    is_default = list_id == coordinator.list_id
-    if is_default and coordinator.has_item(name):
+    if target.has_active_item(name):
         return False
-    if not is_default:
-        existing = await runtime.client.get_list(list_id)
-        target = name.strip().casefold()
-        if any(i.text.strip().casefold() == target for i in existing.items):
-            return False
-    await runtime.client.add_item(list_id, name, article=article)
-    if is_default:
-        await coordinator.async_request_refresh()
+    await runtime.client.add_item(target.id, name, article=article)
+    if target.id == runtime.coordinator.list_id:
+        await runtime.coordinator.async_request_refresh()
     return True
 
 
-async def async_setup_services(hass: HomeAssistant) -> None:
-    """Register ICA services (idempotent)."""
+def async_setup_services(hass: HomeAssistant) -> None:
+    """Register ICA services (idempotent). Called once from `async_setup`."""
     if hass.services.has_service(DOMAIN, SERVICE_LOOKUP_PRODUCT):
         return
 
     async def lookup_product(call: ServiceCall) -> ServiceResponse:
-        runtime = _get_runtime(hass)
-        client: IcaClient = runtime.client
-        try:
-            product = await client.get_product(call.data[ATTR_BARCODE])
-        except IcaError as err:
-            raise HomeAssistantError(str(err)) from err
+        ean = call.data[ATTR_BARCODE]
+        entry = _get_entry(hass)
+        runtime = entry.runtime_data
+        async with _map_ica_errors(hass, entry):
+            product = await runtime.client.get_product(ean)
         if product is None:
-            return {"found": False, "name": None, "ean": call.data[ATTR_BARCODE]}
-        return {"found": True, "name": product.name, "ean": product.ean}
+            return {"found": False, "name": None, "ean": ean}
+        return {"found": True, "name": product.name, "ean": ean}
 
     async def add_item(call: ServiceCall) -> ServiceResponse:
-        runtime = _get_runtime(hass)
         name = call.data[ATTR_NAME]
-        try:
-            list_id = await _resolve_list_id(runtime, call.data.get(ATTR_LIST))
-            added = await _add_deduped(runtime, list_id, name)
-        except IcaError as err:
-            raise HomeAssistantError(str(err)) from err
+        entry = _get_entry(hass)
+        runtime = entry.runtime_data
+        async with _map_ica_errors(hass, entry):
+            target = await _resolve_list(runtime, call.data.get(ATTR_LIST))
+            added = await _add_deduped(runtime, target, name)
         return {"added": added, "name": name}
 
     async def scan_barcode(call: ServiceCall) -> ServiceResponse:
-        runtime = _get_runtime(hass)
-        client: IcaClient = runtime.client
         ean = call.data[ATTR_BARCODE]
-        try:
-            product = await client.get_product(ean)
-            list_id = await _resolve_list_id(runtime, call.data.get(ATTR_LIST))
+        entry = _get_entry(hass)
+        runtime = entry.runtime_data
+        async with _map_ica_errors(hass, entry):
+            product = await runtime.client.get_product(ean)
+            target = await _resolve_list(runtime, call.data.get(ATTR_LIST))
             if product is not None:
                 name = product.name
                 found = True
@@ -123,35 +163,19 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 name = f"{UNKNOWN_ITEM_PREFIX} {ean}"
                 found = False
                 article = None
-            added = await _add_deduped(runtime, list_id, name, article=article)
-        except IcaError as err:
-            raise HomeAssistantError(str(err)) from err
+            added = await _add_deduped(runtime, target, name, article=article)
         return {"found": found, "added": added, "name": name, "ean": ean}
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LOOKUP_PRODUCT,
-        lookup_product,
-        schema=_LOOKUP_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
+    services: tuple[tuple[str, _ServiceHandler, vol.Schema], ...] = (
+        (SERVICE_LOOKUP_PRODUCT, lookup_product, _LOOKUP_SCHEMA),
+        (SERVICE_ADD_ITEM, add_item, _ADD_SCHEMA),
+        (SERVICE_SCAN_BARCODE, scan_barcode, _SCAN_SCHEMA),
     )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ADD_ITEM,
-        add_item,
-        schema=_ADD_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SCAN_BARCODE,
-        scan_barcode,
-        schema=_SCAN_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-
-
-def async_unload_services(hass: HomeAssistant) -> None:
-    """Unregister ICA services."""
-    for name in (SERVICE_LOOKUP_PRODUCT, SERVICE_ADD_ITEM, SERVICE_SCAN_BARCODE):
-        hass.services.async_remove(DOMAIN, name)
+    for name, handler, schema in services:
+        hass.services.async_register(
+            DOMAIN,
+            name,
+            handler,
+            schema=schema,
+            supports_response=SupportsResponse.OPTIONAL,
+        )

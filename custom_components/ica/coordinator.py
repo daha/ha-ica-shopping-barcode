@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -12,11 +13,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import IcaClient, IcaError, ShoppingList
 from .api.exceptions import IcaAuthError, IcaGatewayBlockedError
-from .const import DOMAIN
+from .const import DOMAIN, ISSUE_GATEWAY_BLOCKED
+
+if TYPE_CHECKING:
+    from . import IcaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-
-ISSUE_GATEWAY_BLOCKED = "gateway_blocked"
 
 
 class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
@@ -25,6 +27,7 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: IcaConfigEntry,
         client: IcaClient,
         list_id: str,
         interval_minutes: int,
@@ -32,6 +35,7 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name="ICA shopping list",
             update_interval=timedelta(minutes=interval_minutes),
         )
@@ -58,10 +62,3 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
             raise UpdateFailed(str(err)) from err
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_GATEWAY_BLOCKED)
         return data
-
-    def has_item(self, name: str) -> bool:
-        """Return True if an item with this name (case-insensitive) exists."""
-        if self.data is None:
-            return False
-        target = name.strip().casefold()
-        return any(item.text.strip().casefold() == target for item in self.data.items)

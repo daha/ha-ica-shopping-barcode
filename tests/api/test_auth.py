@@ -178,3 +178,11 @@ async def test_login_form_bad_credentials_raises_auth_error() -> None:
             mock.post(c.LOGIN_ENDPOINT, status=401, body="nope")
             with pytest.raises(IcaAuthError):
                 await auth._login_form("199001010000", "wrong")
+
+
+async def test_refresh_without_token_raises_auth_error() -> None:
+    """S12: the internal guard (formerly a bare `assert`) raises IcaAuthError."""
+    async with aiohttp.ClientSession() as session:
+        auth = IcaAuth(session)
+        with pytest.raises(IcaAuthError):
+            await auth._refresh()

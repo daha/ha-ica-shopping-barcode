@@ -205,7 +205,8 @@ class IcaAuth:
         return token
 
     async def _refresh(self) -> None:
-        assert self._token is not None
+        if self._token is None:
+            raise IcaAuthError("Cannot refresh: not authenticated")
         basic = base64.b64encode(
             f"{self._token.client_id}:{self._token.client_secret}".encode()
         ).decode()

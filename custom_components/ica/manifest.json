@@ -9,5 +9,6 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/davidhaglund/barcode-ica-shopping-list/issues",
   "requirements": [],
+  "single_config_entry": true,
   "version": "0.1.0"
 }

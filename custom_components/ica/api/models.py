@@ -5,6 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .exceptions import IcaError
+
+
+def _required(data: dict[str, Any], key: str) -> Any:
+    """Return `data[key]`, mapping a malformed (missing-key) payload to IcaError."""
+    try:
+        return data[key]
+    except KeyError as err:
+        raise IcaError(f"Malformed ICA API payload: missing '{key}'") from err
+
 
 @dataclass(slots=True)
 class Product:
@@ -34,7 +44,7 @@ class Product:
         if article_id is None:
             article_id = data.get("id")
         return cls(
-            name=data["name"],
+            name=_required(data, "name"),
             ean=ean,
             article_id=article_id,
             article_group_id=group,
@@ -77,8 +87,8 @@ class ShoppingListItem:
         article = data.get("article") or {}
         group = article.get("group") or {}
         return cls(
-            id=data["id"],
-            text=data["text"],
+            id=_required(data, "id"),
+            text=_required(data, "text"),
             is_checked=bool(data.get("isStriked", False)),
             article_group_id=group.get("id"),
         )
@@ -96,7 +106,15 @@ class ShoppingList:
     def from_api(cls, data: dict[str, Any]) -> ShoppingList:
         rows = data.get("rows") or []
         return cls(
-            id=data["id"],
+            id=_required(data, "id"),
             name=data.get("name", ""),
             items=[ShoppingListItem.from_api(row) for row in rows],
+        )
+
+    def has_active_item(self, name: str) -> bool:
+        """True if an UNCHECKED row matches name (case-insensitive)."""
+        target = name.strip().casefold()
+        return any(
+            not item.is_checked and item.text.strip().casefold() == target
+            for item in self.items
         )
