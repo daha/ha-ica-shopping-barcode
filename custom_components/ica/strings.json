@@ -71,6 +71,9 @@
     },
     "empty_item": {
       "message": "Cannot add an item without a name."
+    },
+    "refresh_failed": {
+      "message": "Could not refresh the ICA shopping list: {error}"
     }
   },
   "services": {
@@ -111,6 +114,11 @@
           "description": "Target list title. Defaults to the configured list."
         }
       }
+    },
+    "refresh_list": {
+      "name": "Refresh list",
+      "description": "Force an immediate re-sync of the ICA shopping list, without waiting for the next scheduled poll.",
+      "fields": {}
     }
   }
 }

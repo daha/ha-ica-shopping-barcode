@@ -31,3 +31,6 @@ scan_barcode:
       example: "Inköpslista"
       selector:
         text:
+
+refresh_list:
+  fields: {}

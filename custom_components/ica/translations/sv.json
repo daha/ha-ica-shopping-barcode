@@ -71,6 +71,9 @@
     },
     "empty_item": {
       "message": "Kan inte lägga till en vara utan namn."
+    },
+    "refresh_failed": {
+      "message": "Kunde inte uppdatera ICA-inköpslistan: {error}"
     }
   },
   "services": {
@@ -111,6 +114,11 @@
           "description": "Mållistans titel. Standard är den konfigurerade listan."
         }
       }
+    },
+    "refresh_list": {
+      "name": "Uppdatera listan",
+      "description": "Tvinga en omedelbar synkronisering av ICA-inköpslistan, utan att vänta på nästa schemalagda hämtning.",
+      "fields": {}
     }
   }
 }

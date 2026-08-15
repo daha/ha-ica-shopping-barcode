@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 SERVICE_LOOKUP_PRODUCT = "lookup_product"
 SERVICE_ADD_ITEM = "add_item"
 SERVICE_SCAN_BARCODE = "scan_barcode"
+SERVICE_REFRESH_LIST = "refresh_list"
 
 ATTR_BARCODE = "barcode"
 ATTR_NAME = "name"
@@ -38,6 +39,7 @@ _ADD_SCHEMA = vol.Schema(
 _SCAN_SCHEMA = vol.Schema(
     {vol.Required(ATTR_BARCODE): cv.string, vol.Optional(ATTR_LIST): cv.string}
 )
+_REFRESH_SCHEMA = vol.Schema({})
 
 _ServiceHandler = Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]
 
@@ -166,10 +168,36 @@ def async_setup_services(hass: HomeAssistant) -> None:
             "category": category,
         }
 
+    async def refresh_list(call: ServiceCall) -> ServiceResponse:
+        entry = _get_entry(hass)
+        coordinator = entry.runtime_data.coordinator
+        # The IMMEDIATE refresh, not the debounced `async_request_refresh`:
+        # this service exists precisely to bypass any waiting. Going through
+        # the coordinator keeps the repair-issue and reauth handling in
+        # `_async_update_data`.
+        await coordinator.async_refresh()
+        if not coordinator.last_update_success:
+            # `async_refresh` only logs failures, and a force-refresh that
+            # silently does nothing is the very problem this service solves.
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="refresh_failed",
+                translation_placeholders={
+                    "error": str(coordinator.last_exception or "unknown error")
+                },
+            )
+        data = coordinator.data
+        return {
+            "list": data.name,
+            "items": len(data.items),
+            "unchecked": sum(1 for item in data.items if not item.is_checked),
+        }
+
     services: tuple[tuple[str, _ServiceHandler, vol.Schema], ...] = (
         (SERVICE_LOOKUP_PRODUCT, lookup_product, _LOOKUP_SCHEMA),
         (SERVICE_ADD_ITEM, add_item, _ADD_SCHEMA),
         (SERVICE_SCAN_BARCODE, scan_barcode, _SCAN_SCHEMA),
+        (SERVICE_REFRESH_LIST, refresh_list, _REFRESH_SCHEMA),
     )
     for name, handler, schema in services:
         hass.services.async_register(

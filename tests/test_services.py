@@ -373,3 +373,56 @@ async def test_service_gateway_blocked_creates_repair_issue(
         )
     issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_GATEWAY_BLOCKED)
     assert issue is not None
+
+
+async def test_refresh_list_forces_immediate_refresh_and_reports_counts(
+    hass: HomeAssistant,
+) -> None:
+    # The point of this service is to bypass the debouncer, so it must use the
+    # immediate `async_refresh`, never the coalescing `async_request_refresh`.
+    await _setup(
+        hass,
+        [
+            ShoppingListItem("R1", "Mjölk", False),
+            ShoppingListItem("R2", "Bröd", True),
+        ],
+    )
+    with (
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_refresh",
+            AsyncMock(),
+        ) as refresh,
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh",
+            AsyncMock(),
+        ) as debounced,
+    ):
+        resp = await hass.services.async_call(
+            DOMAIN, "refresh_list", {}, blocking=True, return_response=True
+        )
+    refresh.assert_awaited_once()
+    debounced.assert_not_awaited()
+    assert resp == {"list": "Inköpslista", "items": 2, "unchecked": 1}
+
+
+async def test_refresh_list_raises_when_the_refresh_failed(
+    hass: HomeAssistant,
+) -> None:
+    # `async_refresh` only logs on failure; a force-refresh that silently does
+    # nothing is exactly what this service exists to avoid.
+    entry = await _setup(hass, [])
+    coordinator = entry.runtime_data.coordinator
+    with (
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_refresh",
+            AsyncMock(),
+        ),
+        pytest.raises(HomeAssistantError) as err,
+    ):
+        coordinator.last_update_success = False
+        await hass.services.async_call(
+            DOMAIN, "refresh_list", {}, blocking=True, return_response=True
+        )
+    # Assert the SPECIFIC error, so this cannot pass merely because the service
+    # does not exist — ServiceNotFound is also a HomeAssistantError.
+    assert err.value.translation_key == "refresh_failed"

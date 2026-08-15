@@ -382,3 +382,30 @@ matches fuzzily by name and is deliberately not used here.
 - Responses: `lookup_product → {found, name, ean, category}`,
   `scan_barcode → {found, added, name, ean, category}`. `add_item` is unchanged
   (free text, no product to categorise).
+
+## 15. Addendum — `ica.refresh_list` service (2026-08-15)
+
+Driver: force the locally synced list up to date on demand, without waiting for
+the poll interval.
+
+**Why not `homeassistant.update_entity`:** it exists and targets the to-do
+entity, but `CoordinatorEntity.async_update` calls `async_request_refresh()`,
+which is **debounced** (a burst inside the cooldown collapses) and returns
+nothing — so it cannot report whether the refresh actually happened.
+
+**Decisions:**
+- New service **`ica.refresh_list`**, no parameters (`single_config_entry`
+  means exactly one list), `SupportsResponse.OPTIONAL` like the others.
+- Refresh via `coordinator.async_refresh()` — the **immediate** variant, not
+  the debounced `async_request_refresh()`. Routing through the coordinator
+  reuses `_async_update_data`, so the `gateway_blocked` repair issue is still
+  created/cleared and an auth failure still triggers reauth (the latter works
+  because the coordinator is constructed with `config_entry=`).
+- **`async_refresh()` swallows failures** — it logs and sets
+  `last_update_success = False`. A force-refresh that silently does nothing is
+  precisely the problem being solved, so the service checks that flag and
+  raises a translated `HomeAssistantError` (`refresh_failed`, carrying the
+  coordinator's last exception).
+- Response: `{list, items, unchecked}` — the list name, its total row count,
+  and how many are still unbought — enough to see at a glance whether the local
+  copy is current.
