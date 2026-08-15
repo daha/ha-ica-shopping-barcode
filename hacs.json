@@ -1,5 +1,5 @@
 {
-  "name": "ICA Shopping List",
+  "name": "ICA Shopping List & Barcode",
   "render_readme": true,
   "homeassistant": "2025.1.0"
 }
