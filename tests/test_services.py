@@ -61,13 +61,24 @@ def _patch_lists(items: list[ShoppingListItem]) -> Any:
     )
 
 
+def _patch_groups(groups: dict[int, str] | None = None) -> Any:
+    """Patch the article-group reference table that resolves `category`."""
+    return patch(
+        "custom_components.ica.api.client.IcaClient.get_article_groups",
+        AsyncMock(return_value={} if groups is None else groups),
+    )
+
+
 async def test_lookup_product_found(hass: HomeAssistant) -> None:
     await _setup(hass, [])
-    with patch(
-        "custom_components.ica.api.client.IcaClient.get_product",
-        # C2: the API's `gtin` (here deliberately zero-padded, i.e. different
-        # from the barcode we called with) must NOT leak into the response.
-        AsyncMock(return_value=Product("Mjölk", "07311041000000", 1, 10, 10)),
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.get_product",
+            # C2: the API's `gtin` (here deliberately zero-padded, i.e. different
+            # from the barcode we called with) must NOT leak into the response.
+            AsyncMock(return_value=Product("Mjölk", "07311041000000", 1, 10, 10)),
+        ),
+        _patch_groups({10: "Mejeri"}),
     ):
         resp = await hass.services.async_call(
             DOMAIN,
@@ -77,7 +88,35 @@ async def test_lookup_product_found(hass: HomeAssistant) -> None:
             return_response=True,
         )
     # `ean` is always the INPUT barcode (C2), never `product.ean`.
-    assert resp == {"found": True, "name": "Mjölk", "ean": "7311041000000"}
+    assert resp == {
+        "found": True,
+        "name": "Mjölk",
+        "ean": "7311041000000",
+        "category": "Mejeri",
+    }
+
+
+async def test_lookup_product_unknown_group_gives_null_category(
+    hass: HomeAssistant,
+) -> None:
+    # An id absent from the reference table must yield None — never a guess and
+    # never the real group "Ospecificerad".
+    await _setup(hass, [])
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.get_product",
+            AsyncMock(return_value=Product("Nåt", "123", 1, 32, 32)),
+        ),
+        _patch_groups({10: "Mejeri"}),
+    ):
+        resp = await hass.services.async_call(
+            DOMAIN,
+            "lookup_product",
+            {"barcode": "123"},
+            blocking=True,
+            return_response=True,
+        )
+    assert resp == {"found": True, "name": "Nåt", "ean": "123", "category": None}
 
 
 async def test_lookup_product_not_found_returns_input_ean(hass: HomeAssistant) -> None:
@@ -93,13 +132,14 @@ async def test_lookup_product_not_found_returns_input_ean(hass: HomeAssistant) -
             blocking=True,
             return_response=True,
         )
-    assert resp == {"found": False, "name": None, "ean": "999"}
+    assert resp == {"found": False, "name": None, "ean": "999", "category": None}
 
 
 async def test_scan_barcode_attaches_article(hass: HomeAssistant) -> None:
     await _setup(hass, [])
     with (
         _patch_lists([]),
+        _patch_groups({10: "Mejeri"}),
         patch(
             "custom_components.ica.api.client.IcaClient.get_product",
             AsyncMock(return_value=Product("mjölk", "7310865000293", 11103, 10, 10)),
@@ -128,6 +168,7 @@ async def test_scan_barcode_attaches_article(hass: HomeAssistant) -> None:
         "added": True,
         "name": "mjölk",
         "ean": "7310865000293",
+        "category": "Mejeri",
     }
 
 
@@ -160,6 +201,7 @@ async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
         "added": True,
         "name": "Okänd vara 999",
         "ean": "999",
+        "category": None,
     }
 
 

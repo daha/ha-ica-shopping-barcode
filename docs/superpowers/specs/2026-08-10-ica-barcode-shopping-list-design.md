@@ -320,3 +320,34 @@ barcode-ica-shopping-list/
    for the configured default list initially; one-entity-per-list remains a
    possible later enhancement, not part of the planned phases.
 3. **UI languages — English (source) + Swedish.** Item text stays Swedish (data).
+
+## 14. Addendum — product category in service responses (2026-08-15)
+
+Driver: the ESPHome device displays **EAN, name, and category**, so the category
+must come back in clear text from the services.
+
+**Confirmed reference endpoint** (verified against the live account):
+`GET {API_BASE}/sverige/digx/mobile/shoppinglistservice/v1/articles/articlegroups?lastsyncdate=2001-01-01`
+→ `200 {"articleGroups": [{"id": 3, "name": "Bröd, kex och bageri", "parentId": 1,
+"lastSyncDate": "2015-09-18T08:45:55"}, …]}` — note the **lowercase** keys and the
+`articleGroups` envelope. It returns **10 coarse groups**, all `parentId: 1`.
+Confirmed: 4 = Frukt & Grönt, 5 = Djupfryst, 6 = Färskvaror, 9 = Skafferivaror,
+10 = Mejeri, 11 = Hem & Fritid, 12 = Ospecificerad.
+
+**Key finding:** the *expanded* group ids seen on rows and in product lookups
+(13, 18, 19, 21, 27, 32) are **not** in this table — it holds only the coarse
+taxonomy. Expanded names exist in the article-search payload, but that endpoint
+matches fuzzily by name and is deliberately not used here.
+
+**Decisions:**
+- `category` resolves from the product's coarse `articleGroupId` only. No
+  expanded-id fallback chain, because it could never fire.
+- `category` is `null` when the product is not found, the id is unknown, or the
+  reference table is unavailable — never the literal `"Ospecificerad"`, which is
+  a real group ICA itself assigns and must stay distinguishable.
+- The table is static (rows stamped 2015): fetched **once per HA restart**,
+  cached on the `IcaClient` instance. A failed fetch degrades to an empty map; a
+  category lookup must never fail a scan.
+- Responses: `lookup_product → {found, name, ean, category}`,
+  `scan_barcode → {found, added, name, ean, category}`. `add_item` is unchanged
+  (free text, no product to categorise).

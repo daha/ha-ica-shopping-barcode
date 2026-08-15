@@ -18,7 +18,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import issue_registry as ir
 
-from .api import ShoppingList
+from .api import Product, ShoppingList
 from .api.exceptions import IcaAuthError, IcaError, IcaGatewayBlockedError
 from .const import DOMAIN, ISSUE_GATEWAY_BLOCKED, UNKNOWN_ITEM_PREFIX
 
@@ -112,6 +112,20 @@ async def _resolve_list(runtime: IcaRuntimeData, list_name: str | None) -> Shopp
     )
 
 
+async def _category_of(runtime: IcaRuntimeData, product: Product | None) -> str | None:
+    """Resolve a product's coarse article group to clear text, or None.
+
+    Only the coarse `articleGroupId` is resolvable: ICA's article-group table
+    holds just the 10 top-level groups, so the finer `expandedArticleGroupId`
+    has no name to look up. None means "unknown" — never the real group
+    "Ospecificerad", which ICA assigns deliberately.
+    """
+    if product is None or product.article_group_id is None:
+        return None
+    groups = await runtime.client.get_article_groups()
+    return groups.get(product.article_group_id)
+
+
 async def _add_deduped(
     runtime: IcaRuntimeData,
     target: ShoppingList,
@@ -141,9 +155,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
         runtime = entry.runtime_data
         async with _map_ica_errors(hass, entry):
             product = await runtime.client.get_product(ean)
+            category = await _category_of(runtime, product)
         if product is None:
-            return {"found": False, "name": None, "ean": ean}
-        return {"found": True, "name": product.name, "ean": ean}
+            return {"found": False, "name": None, "ean": ean, "category": None}
+        return {"found": True, "name": product.name, "ean": ean, "category": category}
 
     async def add_item(call: ServiceCall) -> ServiceResponse:
         name = call.data[ATTR_NAME]
@@ -172,7 +187,14 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 found = False
                 article = None
             added = await _add_deduped(runtime, target, name, article=article)
-        return {"found": found, "added": added, "name": name, "ean": ean}
+            category = await _category_of(runtime, product)
+        return {
+            "found": found,
+            "added": added,
+            "name": name,
+            "ean": ean,
+            "category": category,
+        }
 
     services: tuple[tuple[str, _ServiceHandler, vol.Schema], ...] = (
         (SERVICE_LOOKUP_PRODUCT, lookup_product, _LOOKUP_SCHEMA),

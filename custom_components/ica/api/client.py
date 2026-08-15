@@ -7,7 +7,7 @@ from typing import Any
 import aiohttp
 
 from .auth import IcaAuth
-from .const import PRODUCT_URL, SHOPPING_LIST_BASE, USER_AGENT
+from .const import ARTICLE_GROUPS_URL, PRODUCT_URL, SHOPPING_LIST_BASE, USER_AGENT
 from .exceptions import (
     IcaAuthError,
     IcaConnectionError,
@@ -23,12 +23,35 @@ class IcaClient:
     def __init__(self, session: aiohttp.ClientSession, auth: IcaAuth) -> None:
         self._session = session
         self._auth = auth
+        self._article_groups: dict[int, str] | None = None
 
     async def get_product(self, ean: str) -> Product | None:
         data = await self._request("GET", f"{PRODUCT_URL}/{ean}", allow_404=True)
         if data is None:
             return None
         return Product.from_api(data)
+
+    async def get_article_groups(self) -> dict[int, str]:
+        """Return the `{group id: name}` reference table, fetched once and cached.
+
+        The table is static, so it is fetched on first use and reused for the
+        life of this client. A failure returns an empty map WITHOUT caching it
+        (so a later call retries): resolving a category must never fail the
+        operation that asked for it.
+        """
+        if self._article_groups is not None:
+            return self._article_groups
+        try:
+            data = await self._request("GET", ARTICLE_GROUPS_URL)
+        except IcaError:
+            return {}
+        groups = (data or {}).get("articleGroups") or []
+        self._article_groups = {
+            group["id"]: group["name"]
+            for group in groups
+            if group.get("id") is not None and group.get("name")
+        }
+        return self._article_groups
 
     async def get_lists(self) -> list[ShoppingList]:
         data = await self._request("GET", f"{SHOPPING_LIST_BASE}/list/all")

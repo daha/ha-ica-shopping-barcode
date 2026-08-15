@@ -31,3 +31,11 @@ SHOPPING_LIST_BASE = f"{API_BASE}/sverige/digx/shopping-list/v1/api"
 # Returns name + articleId + articleGroupId + expandedArticleGroupId, i.e.
 # everything needed to categorise the row; no separate article-search is needed.
 PRODUCT_URL = f"{API_BASE}/sverige/digx/mobile/productservice/v1/product"
+# Article-group reference table, for resolving a product's category to clear text.
+# Returns {"articleGroups": [{"id", "name", "parentId", "lastSyncDate"}, ...]} —
+# 10 COARSE groups only (expanded group ids are not in this table). Static data
+# (rows stamped 2015), so it is fetched once per session and cached.
+ARTICLE_GROUPS_URL = (
+    f"{API_BASE}/sverige/digx/mobile/shoppinglistservice/v1"
+    "/articles/articlegroups?lastsyncdate=2001-01-01"
+)

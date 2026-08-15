@@ -173,6 +173,45 @@ async def test_gateway_block_raises() -> None:
                 await client.get_lists()
 
 
+async def test_get_article_groups_parses_envelope_and_caches() -> None:
+    # Real shape: an {"articleGroups": [...]} envelope with lowercase keys.
+    payload = {
+        "articleGroups": [
+            {
+                "id": 10,
+                "name": "Mejeri",
+                "parentId": 1,
+                "lastSyncDate": "2015-09-18T08:36:09",
+            },
+            {
+                "id": 11,
+                "name": "Hem & Fritid",
+                "parentId": 1,
+                "lastSyncDate": "2015-09-21T08:49:05",
+            },
+        ]
+    }
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(c.ARTICLE_GROUPS_URL, payload=payload)
+            first = await client.get_article_groups()
+            # Only ONE response is registered, so a second HTTP request would
+            # fail — proving this call is served from the cache.
+            second = await client.get_article_groups()
+    assert first == {10: "Mejeri", 11: "Hem & Fritid"}
+    assert second == first
+
+
+async def test_get_article_groups_failure_degrades_to_empty_map() -> None:
+    # A category lookup must never fail the caller's operation.
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.get(c.ARTICLE_GROUPS_URL, status=500, body="boom")
+            assert await client.get_article_groups() == {}
+
+
 async def test_401_triggers_refresh_and_retry() -> None:
     async with aiohttp.ClientSession() as session:
         auth = IcaAuth(session, token=_fresh_token())
