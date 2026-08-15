@@ -75,12 +75,17 @@ class Product:
 
 @dataclass(slots=True)
 class ShoppingListItem:
-    """A single row on an ICA shopping list (web dialect)."""
+    """A single row on an ICA shopping list (web dialect).
+
+    Keeps the FULL raw row: ICA's update endpoint REPLACES the row, so an edit
+    has to send every field back (see `to_updated_row`).
+    """
 
     id: str  # row GUID
     text: str
     is_checked: bool
     article_group_id: int | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> ShoppingListItem:
@@ -91,7 +96,23 @@ class ShoppingListItem:
             text=_required(data, "text"),
             is_checked=bool(data.get("isStriked", False)),
             article_group_id=group.get("id"),
+            raw=dict(data),
         )
+
+    def to_updated_row(
+        self, *, text: str | None = None, is_checked: bool | None = None
+    ) -> dict[str, Any]:
+        """Return the full row with ONLY the given fields changed.
+
+        Everything else from the original payload passes through untouched, so
+        `article` (the item's category), `order`, `quantity`, `created` and the
+        rest survive an edit. Omitted arguments keep the current value.
+        """
+        row = dict(self.raw)
+        row.setdefault("id", self.id)
+        row["text"] = self.text if text is None else text
+        row["isStriked"] = self.is_checked if is_checked is None else is_checked
+        return row
 
 
 @dataclass(slots=True)

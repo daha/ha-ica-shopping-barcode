@@ -174,3 +174,60 @@ def test_shopping_list_item_from_api_missing_text_raises_ica_error() -> None:
 def test_shopping_list_from_api_missing_id_raises_ica_error() -> None:
     with pytest.raises(IcaError):
         ShoppingList.from_api({"name": "Tom"})
+
+
+def test_shopping_list_item_keeps_raw_row() -> None:
+    row = {
+        "id": "R1",
+        "text": "mjölk",
+        "isStriked": False,
+        "order": -184,
+        "quantity": None,
+        "article": {"id": 11103, "group": {"id": 10}, "extendedGroup": {"id": 10}},
+        "shoppingListRowId": 1030857476,
+        "ingredientGroup": 1000,
+    }
+    item = ShoppingListItem.from_api(row)
+    assert item.raw == row
+
+
+def test_to_updated_row_flips_checked_and_keeps_everything_else() -> None:
+    # ICA replaces the WHOLE row, so every field we received must go back —
+    # dropping `article` here would destroy the item's category.
+    row = {
+        "id": "R1",
+        "text": "mjölk",
+        "isStriked": False,
+        "order": -184,
+        "article": {"id": 11103, "group": {"id": 10}},
+        "shoppingListRowId": 1030857476,
+    }
+    updated = ShoppingListItem.from_api(row).to_updated_row(is_checked=True)
+    assert updated["isStriked"] is True
+    assert updated["text"] == "mjölk"
+    assert updated["article"] == {"id": 11103, "group": {"id": 10}}
+    assert updated["order"] == -184
+    assert updated["shoppingListRowId"] == 1030857476
+
+
+def test_to_updated_row_renames_without_touching_status() -> None:
+    row = {"id": "R1", "text": "mjolk", "isStriked": True, "article": {"id": 1}}
+    updated = ShoppingListItem.from_api(row).to_updated_row(text="Mjölk")
+    assert updated["text"] == "Mjölk"
+    assert updated["isStriked"] is True  # unchanged
+    assert updated["article"] == {"id": 1}
+
+
+def test_to_updated_row_defaults_to_current_values() -> None:
+    row = {"id": "R1", "text": "mjölk", "isStriked": True}
+    updated = ShoppingListItem.from_api(row).to_updated_row()
+    assert updated["text"] == "mjölk"
+    assert updated["isStriked"] is True
+
+
+def test_to_updated_row_ensures_id_when_raw_is_empty() -> None:
+    # A hand-built item (no raw payload) must still produce a usable row.
+    updated = ShoppingListItem("R9", "Bröd", False).to_updated_row(is_checked=True)
+    assert updated["id"] == "R9"
+    assert updated["text"] == "Bröd"
+    assert updated["isStriked"] is True
