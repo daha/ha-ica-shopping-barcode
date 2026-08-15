@@ -85,16 +85,24 @@ async def _map_ica_errors(
 
 
 async def _resolve_list(runtime: IcaRuntimeData, list_name: str | None) -> ShoppingList:
-    """Return the target list, fetching `list/all` at most once."""
+    """Return the target list, ALWAYS freshly fetched (one `list/all` call).
+
+    Dedupe must never be decided from the coordinator's cached snapshot: it can
+    be up to `scan_interval` minutes old, so an item checked off or deleted in
+    the ICA app since the last poll would still look present and the add would
+    be silently skipped (`added: false`, nothing written).
+    """
+    lists = await runtime.client.get_lists()
     if list_name is None:
-        target = runtime.coordinator.data
-        if target is None:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="list_not_loaded"
-            )
-        return target
+        list_id = runtime.coordinator.list_id
+        for lst in lists:
+            if lst.id == list_id:
+                return lst
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="list_not_found"
+        )
     target_cf = list_name.strip().casefold()
-    for lst in await runtime.client.get_lists():
+    for lst in lists:
         if lst.name.strip().casefold() == target_cf:
             return lst
     raise ServiceValidationError(

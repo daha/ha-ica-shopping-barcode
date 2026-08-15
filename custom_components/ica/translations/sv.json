@@ -57,8 +57,8 @@
     "unknown_list": {
       "message": "Ingen ICA-lista med namnet \"{name}\" hittades."
     },
-    "list_not_loaded": {
-      "message": "ICA-inköpslistan har inte laddats än."
+    "list_not_found": {
+      "message": "Den konfigurerade ICA-inköpslistan kunde inte hittas."
     },
     "auth_failed": {
       "message": "ICA avvisade anropet; återautentisering krävs."

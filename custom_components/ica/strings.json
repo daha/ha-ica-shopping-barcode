@@ -57,8 +57,8 @@
     "unknown_list": {
       "message": "No ICA list named \"{name}\"."
     },
-    "list_not_loaded": {
-      "message": "The ICA shopping list has not loaded yet."
+    "list_not_found": {
+      "message": "The configured ICA shopping list could not be found."
     },
     "auth_failed": {
       "message": "ICA rejected the request; re-authentication is required."

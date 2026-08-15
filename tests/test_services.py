@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -46,6 +47,20 @@ async def _setup(hass: HomeAssistant, items: list[ShoppingListItem]) -> MockConf
     return entry
 
 
+def _patch_lists(items: list[ShoppingListItem]) -> Any:
+    """Patch the FRESH `get_lists()` read every list operation now performs.
+
+    List operations never read the coordinator's cached snapshot, so tests must
+    supply the upstream state here — which is what makes the staleness
+    regression test below possible.
+    """
+    lst = ShoppingList(id="G1", name="Inköpslista", items=items)
+    return patch(
+        "custom_components.ica.api.client.IcaClient.get_lists",
+        AsyncMock(return_value=[lst]),
+    )
+
+
 async def test_lookup_product_found(hass: HomeAssistant) -> None:
     await _setup(hass, [])
     with patch(
@@ -84,6 +99,7 @@ async def test_lookup_product_not_found_returns_input_ean(hass: HomeAssistant) -
 async def test_scan_barcode_attaches_article(hass: HomeAssistant) -> None:
     await _setup(hass, [])
     with (
+        _patch_lists([]),
         patch(
             "custom_components.ica.api.client.IcaClient.get_product",
             AsyncMock(return_value=Product("mjölk", "7310865000293", 11103, 10, 10)),
@@ -118,6 +134,7 @@ async def test_scan_barcode_attaches_article(hass: HomeAssistant) -> None:
 async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
     await _setup(hass, [])
     with (
+        _patch_lists([]),
         patch(
             "custom_components.ica.api.client.IcaClient.get_product",
             AsyncMock(return_value=None),
@@ -149,6 +166,7 @@ async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
 async def test_add_item_dedupes(hass: HomeAssistant) -> None:
     await _setup(hass, [ShoppingListItem("R1", "Mjölk", False)])
     with (
+        _patch_lists([ShoppingListItem("R1", "Mjölk", False)]),
         patch(
             "custom_components.ica.api.client.IcaClient.add_item", AsyncMock()
         ) as add,
@@ -168,6 +186,7 @@ async def test_add_item_readds_checked_off_item(hass: HomeAssistant) -> None:
     # C1: a struck-through ("bought") row must NOT block re-adding the item.
     await _setup(hass, [ShoppingListItem("R1", "Mjölk", True)])
     with (
+        _patch_lists([ShoppingListItem("R1", "Mjölk", True)]),
         patch(
             "custom_components.ica.api.client.IcaClient.add_item", AsyncMock()
         ) as add,
@@ -181,6 +200,41 @@ async def test_add_item_readds_checked_off_item(hass: HomeAssistant) -> None:
         )
     add.assert_awaited_once_with("G1", "mjölk", article=None)
     assert resp == {"added": True, "name": "mjölk"}
+
+
+async def test_add_item_ignores_stale_cached_snapshot(hass: HomeAssistant) -> None:
+    """Reported bug: `added: false` for an item removed/checked since the poll.
+
+    The coordinator's snapshot still showed the item active, but it had been
+    checked off or deleted in the ICA app since. The decision must come from a
+    FRESH fetch, so the add goes through.
+    """
+    entry = await _setup(hass, [ShoppingListItem("R1", "Mellanmjölk ICA", False)])
+    cached = entry.runtime_data.coordinator.data
+    assert cached is not None
+    assert (
+        cached.has_active_item("mellanmjölk ica") is True
+    )  # stale cache says "present"
+
+    with (
+        _patch_lists([]),  # upstream reality: it is gone
+        patch(
+            "custom_components.ica.api.client.IcaClient.add_item", AsyncMock()
+        ) as add,
+        patch(
+            "custom_components.ica.coordinator.IcaDataUpdateCoordinator.async_request_refresh",
+            AsyncMock(),
+        ),
+    ):
+        resp = await hass.services.async_call(
+            DOMAIN,
+            "add_item",
+            {"name": "Mellanmjölk ICA"},
+            blocking=True,
+            return_response=True,
+        )
+    add.assert_awaited_once_with("G1", "Mellanmjölk ICA", article=None)
+    assert resp == {"added": True, "name": "Mellanmjölk ICA"}
 
 
 async def test_add_item_named_list_fetches_lists_once(hass: HomeAssistant) -> None:
