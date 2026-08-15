@@ -107,6 +107,11 @@ class ShoppingListItem:
         Everything else from the original payload passes through untouched, so
         `article` (the item's category), `order`, `quantity`, `created` and the
         rest survive an edit. Omitted arguments keep the current value.
+
+        The returned dict is a SHALLOW copy: nested values (`article`,
+        `quantity`) are shared with this item's cached payload, so treat the
+        result as read-only. Mutating them in place would corrupt the
+        coordinator's snapshot until the next poll.
         """
         row = dict(self.raw)
         row.setdefault("id", self.id)

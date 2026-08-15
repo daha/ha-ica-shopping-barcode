@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.components.todo import TodoItem, TodoListEntity
 from homeassistant.components.todo.const import TodoItemStatus, TodoListEntityFeature
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -92,24 +92,33 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
 
     async def async_create_todo_item(self, item: TodoItem) -> None:
         """Add an item. Deliberately NOT deduped — see spec §6."""
-        async with map_ica_errors(self.hass, self._entry):
-            await self._client.add_item(self.coordinator.list_id, item.summary or "")
-        await self.coordinator.async_request_refresh()
+        summary = (item.summary or "").strip()
+        if not summary:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="empty_item"
+            )
+        try:
+            async with map_ica_errors(self.hass, self._entry):
+                await self._client.add_item(self.coordinator.list_id, summary)
+        finally:
+            await self.coordinator.async_request_refresh()
 
     async def async_update_todo_item(self, item: TodoItem) -> None:
         """Rename and/or check off an item, preserving the rest of its row."""
-        async with map_ica_errors(self.hass, self._entry):
-            row = self._row(item.uid or "")
-            await self._client.update_item(
-                row,
-                text=item.summary,
-                is_checked=(
-                    None
-                    if item.status is None
-                    else item.status == TodoItemStatus.COMPLETED
-                ),
-            )
-        await self.coordinator.async_request_refresh()
+        try:
+            async with map_ica_errors(self.hass, self._entry):
+                row = self._row(item.uid or "")
+                await self._client.update_item(
+                    row,
+                    text=item.summary,
+                    is_checked=(
+                        None
+                        if item.status is None
+                        else item.status == TodoItemStatus.COMPLETED
+                    ),
+                )
+        finally:
+            await self.coordinator.async_request_refresh()
 
     async def async_delete_todo_items(self, uids: list[str]) -> None:
         """Delete items (the card's 'remove completed items' sends several).

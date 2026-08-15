@@ -68,6 +68,9 @@
     },
     "item_not_found": {
       "message": "Varan finns inte längre på ICA-inköpslistan."
+    },
+    "empty_item": {
+      "message": "Kan inte lägga till en vara utan namn."
     }
   },
   "services": {

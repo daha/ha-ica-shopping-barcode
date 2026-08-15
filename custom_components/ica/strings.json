@@ -68,6 +68,9 @@
     },
     "item_not_found": {
       "message": "That item is no longer on the ICA shopping list."
+    },
+    "empty_item": {
+      "message": "Cannot add an item without a name."
     }
   },
   "services": {

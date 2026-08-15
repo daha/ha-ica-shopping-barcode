@@ -7,17 +7,24 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from custom_components.ica.api.auth import IcaToken
-from custom_components.ica.api.exceptions import IcaAuthError, IcaError
+from custom_components.ica.api.exceptions import (
+    IcaAuthError,
+    IcaError,
+    IcaGatewayBlockedError,
+)
 from custom_components.ica.api.models import ShoppingList, ShoppingListItem
 from custom_components.ica.const import (
     CONF_LIST_ID,
     CONF_LIST_TITLE,
     CONF_TOKEN,
     DOMAIN,
+    ISSUE_GATEWAY_BLOCKED,
 )
+from homeassistant.components.todo import TodoItem
 from homeassistant.components.todo.const import DATA_COMPONENT
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 REFRESH = (
@@ -98,6 +105,22 @@ async def test_create_item_does_not_dedupe(hass: HomeAssistant) -> None:
         )
     add.assert_awaited_once_with("G1", "Mjölk")
     refresh.assert_awaited_once()
+
+
+async def test_create_item_rejects_blank_summary(hass: HomeAssistant) -> None:
+    # A mis-parsed voice command must not create a nameless row the user has
+    # to hunt down in the ICA app.
+    entity_id = await _setup(hass, [ShoppingListItem("R1", "Mjölk", False)])
+    entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
+    assert entity is not None
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.add_item", AsyncMock()
+        ) as add,
+        pytest.raises(ServiceValidationError),
+    ):
+        await entity.async_create_todo_item(TodoItem(summary="   "))
+    add.assert_not_awaited()
 
 
 async def test_check_off_item_preserves_the_rest_of_the_row(
@@ -199,7 +222,9 @@ async def test_remove_item(hass: HomeAssistant) -> None:
 
 async def test_delete_multiple_items(hass: HomeAssistant) -> None:
     # The "remove completed items" card action sends several uids at once —
-    # i.e. CHECKED rows, so that's what this test represents.
+    # i.e. CHECKED rows, so that's what this test represents. Driven through
+    # the real HA service (rather than calling the entity method directly) so
+    # this exercises the same path `_async_remove_completed_items` uses.
     entity_id = await _setup(
         hass,
         [
@@ -207,15 +232,19 @@ async def test_delete_multiple_items(hass: HomeAssistant) -> None:
             ShoppingListItem("R2", "Bröd", True),
         ],
     )
-    entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
-    assert entity is not None
     with (
         patch(
             "custom_components.ica.api.client.IcaClient.remove_item", AsyncMock()
         ) as remove,
         patch(REFRESH, AsyncMock()) as refresh,
     ):
-        await entity.async_delete_todo_items(["R1", "R2"])
+        await hass.services.async_call(
+            "todo",
+            "remove_completed_items",
+            {},
+            target={"entity_id": entity_id},
+            blocking=True,
+        )
     assert remove.await_args_list == [call("R1"), call("R2")]
     refresh.assert_awaited_once()
 
@@ -247,3 +276,29 @@ async def test_delete_partial_failure_still_refreshes(hass: HomeAssistant) -> No
     # All three uids were attempted, not just the one that failed.
     assert remove.await_args_list == [call("R1"), call("R2"), call("R3")]
     refresh.assert_awaited_once()
+
+
+async def test_add_item_gateway_blocked_creates_repair_issue(
+    hass: HomeAssistant,
+) -> None:
+    # Same justification as the reauth test above, but for the OTHER branch
+    # `map_ica_errors` special-cases: a blocked gateway must raise a repair
+    # issue, not just a plain error.
+    entity_id = await _setup(hass, [ShoppingListItem("R1", "Mjölk", False)])
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.add_item",
+            AsyncMock(side_effect=IcaGatewayBlockedError("403")),
+        ),
+        patch(REFRESH, AsyncMock()),
+        pytest.raises(HomeAssistantError),
+    ):
+        await hass.services.async_call(
+            "todo",
+            "add_item",
+            {"item": "Ost"},
+            target={"entity_id": entity_id},
+            blocking=True,
+        )
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_GATEWAY_BLOCKED)
+    assert issue is not None
