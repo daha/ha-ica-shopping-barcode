@@ -183,18 +183,46 @@ ESP32 reads EAN
 
 ## 6. Phase 2 — Shopping list in Home Assistant
 
-Implement `TodoListEntity` for the configured ICA list (at least the default;
-optionally one entity per list). This single choice provides:
+Implement `TodoListEntity` for the configured ICA list. This single choice
+provides:
 
-- Native HA **To-do / Shopping List** Lovelace card: add / remove / check-off
-  (bidirectional editing).
+- Native HA **To-do / Shopping List** Lovelace card: add / remove / check-off /
+  rename (bidirectional editing).
 - **Voice control for free** via Assist's built-in to-do intents (satisfies the
   future voice-control use-case with no extra code).
-- Consistent **"merge, no count"** behavior for UI/voice adds (reuses service logic).
+
+**Design (settled 2026-08-15, before implementation):**
+
+- **Platform** `custom_components/ica/todo.py`; `PLATFORMS = [Platform.TODO]`.
+  One entity for the configured list, named from `CONF_LIST_TITLE`
+  (e.g. `todo.ica_att_handla`). Supported features: `CREATE | DELETE | UPDATE`.
+  **MOVE is not supported** — reordering would mean managing ICA's `order`
+  field across rows, which a mostly-append shopping list does not justify.
+- **Full-row preservation (critical).** ICA's update endpoint takes the *entire*
+  row back, so `ShoppingListItem` keeps `raw` (exactly as `Product` does) and
+  exposes `to_updated_row(*, text=None, is_checked=None)` →
+  `{**raw, "text": …, "isStriked": …}`. Overriding only what changed keeps
+  `article` (and therefore the item's category), `order`, `quantity`,
+  `created`, `shoppingListRowId` intact. Sending only our parsed fields would
+  strip them.
+- **Client:** `update_item(item, *, text=None, is_checked=None)` →
+  `PUT {SHOPPING_LIST_BASE}/row/{id}` (full-row body);
+  `remove_item(item_id)` → `DELETE {SHOPPING_LIST_BASE}/row/{id}` (no body).
+- **UI/voice adds are NOT deduped** — they always add, like every other HA to-do
+  list, because in a card you can see the list and a silent no-op is confusing.
+  *This supersedes the earlier "consistent merge, no count for UI adds".* The
+  scanner services keep their merge-no-count dedupe: a scanner has no display,
+  so silently skipping a duplicate is the desirable behavior there.
+- **Errors:** `_map_ica_errors` moves out of `services.py` into a shared module
+  so the entity inherits identical handling (auth → reauth, gateway 403 →
+  repair issue, otherwise `HomeAssistantError`). No behavior change.
 
 **Sync:** coordinator polling (default 5 min, configurable via options) since ICA
 provides no push/webhook; plus immediate `async_request_refresh()` after any
-HA-side write for a snappy UI.
+HA-side write for a snappy UI. The card therefore acts on the last poll — a
+check-off can race a change made in the ICA app; the write is authoritative and
+the follow-up refresh reconciles. (Service *adds* avoid this entirely by reading
+the list fresh — see §14 and the dedupe-staleness fix.)
 
 ## 7. Behavior decisions (resolved)
 
@@ -307,9 +335,12 @@ barcode-ica-shopping-list/
   pytest, pre-commit, CI, HACS metadata) + API client (auth + `get_product` +
   list add/read) + config flow + the three services + `strings.json` and
   `translations/{en,sv}.json` for the phase-1 UI surface + tests.
-- **Implementation plan #2 → Phase 2:** `TodoListEntity` + full list operations
-  (remove/check) + options for exposed lists + translations for the added UI +
-  tests.
+- **Implementation plan #2 → Phase 2:** `ShoppingListItem.raw` + the row
+  update/delete client methods + shared error mapping + `TodoListEntity`
+  (create/delete/check/rename) + tests. No new translation keys are expected —
+  the entity is named from the list title and reuses the existing `exceptions`
+  block. *(No "options for exposed lists": the manifest declares
+  `single_config_entry`, so there is exactly one list per install.)*
 
 ## 13. Decisions resolved during review
 
