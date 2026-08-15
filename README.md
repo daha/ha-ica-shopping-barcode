@@ -30,6 +30,11 @@ by actions you can call from ESPHome, an automation, or a script.
   raises a repair issue telling you so.
 - Home Assistant 2025.1 or newer.
 
+> **Uses the `ica` domain.** Other ICA integrations — notably
+> [ha-ica-todo](https://github.com/LazyTarget/ha-ica-todo) — use the same
+> domain, and Home Assistant allows only one integration per domain. You cannot
+> run this alongside them; remove the other one first.
+
 ## Installation
 
 1. In HACS → **Custom repositories**, add `https://github.com/daha/ha-ica-shopping-barcode` as an **Integration**.
