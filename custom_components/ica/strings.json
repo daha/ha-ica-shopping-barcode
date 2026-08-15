@@ -103,7 +103,7 @@
     },
     "scan_barcode": {
       "name": "Scan barcode",
-      "description": "Look up a barcode and add the product to a shopping list. Unknown barcodes are added as 'Okänd vara <ean>'.",
+      "description": "Look up a barcode and add the product to a shopping list. Unknown barcodes are added as \"Okänd vara\" followed by the barcode.",
       "fields": {
         "barcode": {
           "name": "Barcode",

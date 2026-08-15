@@ -103,7 +103,7 @@
     },
     "scan_barcode": {
       "name": "Skanna streckkod",
-      "description": "Slå upp en streckkod och lägg till produkten i en inköpslista. Okända streckkoder läggs till som 'Okänd vara <ean>'.",
+      "description": "Slå upp en streckkod och lägg till produkten i en inköpslista. Okända streckkoder läggs till som \"Okänd vara\" följt av streckkoden.",
       "fields": {
         "barcode": {
           "name": "Streckkod",
