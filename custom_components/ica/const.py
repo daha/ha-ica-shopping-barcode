@@ -17,6 +17,6 @@ DEFAULT_SCAN_INTERVAL = 5  # minutes
 
 UNKNOWN_ITEM_PREFIX = "Okänd vara"
 
-PLATFORMS: list[Platform] = []  # Phase 2 adds Platform.TODO
+PLATFORMS: list[Platform] = [Platform.TODO]
 
 ISSUE_GATEWAY_BLOCKED = "gateway_blocked"
