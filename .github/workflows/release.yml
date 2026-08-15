@@ -1,0 +1,42 @@
+name: Release
+
+# HACS treats GitHub releases as versions, while Home Assistant reads the
+# version out of manifest.json. If those two disagree, HACS offers one number
+# and HA reports another — so the tag is checked against the manifest before
+# anything is published.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match manifest.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(python3 -c "import json; print(json.load(open('custom_components/ica/manifest.json'))['version'])")"
+          echo "tag=${tag}  manifest=${manifest}"
+          if [ "${tag}" != "${manifest}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match manifest version ${manifest}. Bump manifest.json and re-tag."
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --group dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy custom_components/ica
+      - run: uv run pytest
+
+      # `gh` ships on GitHub runners, so no third-party action is needed here.
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
