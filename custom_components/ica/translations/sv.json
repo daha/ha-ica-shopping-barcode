@@ -65,6 +65,9 @@
     },
     "gateway_blocked": {
       "message": "ICA blockerar anrop från detta nätverk."
+    },
+    "item_not_found": {
+      "message": "Varan finns inte längre på ICA-inköpslistan."
     }
   },
   "services": {

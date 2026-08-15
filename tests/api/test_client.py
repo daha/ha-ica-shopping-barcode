@@ -337,3 +337,20 @@ async def test_remove_item_deletes_the_row() -> None:
         with aioresponses() as mock:
             mock.delete(f"{c.SHOPPING_LIST_BASE}/row/R1", status=204)
             assert await client.remove_item("R1") is None
+
+
+async def test_remove_item_treats_404_as_success() -> None:
+    # The row is already gone — that is the end state the caller wanted.
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.delete(f"{c.SHOPPING_LIST_BASE}/row/GONE", status=404)
+            assert await client.remove_item("GONE") is None
+
+
+async def test_request_empty_200_body_is_treated_as_no_content() -> None:
+    async with aiohttp.ClientSession() as session:
+        client = _make_client(session)
+        with aioresponses() as mock:
+            mock.delete(f"{c.SHOPPING_LIST_BASE}/row/R1", status=200, body="")
+            assert await client.remove_item("R1") is None

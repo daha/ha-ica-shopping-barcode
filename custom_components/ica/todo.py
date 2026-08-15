@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.models import ShoppingListItem
-from .const import CONF_LIST_TITLE
+from .const import CONF_LIST_TITLE, DOMAIN
 from .coordinator import IcaDataUpdateCoordinator
 from .errors import map_ica_errors
 
@@ -45,9 +45,9 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
         self._client = entry.runtime_data.client
         # The entity id is slugified from this name, so the "ICA " prefix is
         # what produces `todo.ica_<list>` rather than a bare `todo.<list>`.
-        title = entry.data.get(CONF_LIST_TITLE) or "shopping list"
-        self._attr_name = f"ICA {title}"
-        self._attr_unique_id = f"{entry.entry_id}_{self.coordinator.list_id}"
+        title = entry.data.get(CONF_LIST_TITLE)
+        self._attr_name = f"ICA {title}" if title else "ICA"
+        self._attr_unique_id = entry.entry_id
 
     @property
     def todo_items(self) -> list[TodoItem] | None:
@@ -84,7 +84,11 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
         for row in data.items if data is not None else []:
             if row.id == uid:
                 return row
-        raise HomeAssistantError(f"ICA list item {uid} no longer exists")
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="item_not_found",
+            translation_placeholders={"uid": uid},
+        )
 
     async def async_create_todo_item(self, item: TodoItem) -> None:
         """Add an item. Deliberately NOT deduped — see spec §6."""
@@ -110,12 +114,21 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
     async def async_delete_todo_items(self, uids: list[str]) -> None:
         """Delete items (the card's 'remove completed items' sends several).
 
-        The refresh runs in `finally` so a mid-loop failure still surfaces the
-        deletes that DID succeed, instead of hiding them until the next poll.
+        Every uid is attempted even if one fails, so a single bad row cannot
+        block the rest; the first error is re-raised afterwards. The refresh
+        runs in `finally` so the deletes that DID succeed show up immediately
+        instead of waiting for the next poll.
         """
+        first_error: HomeAssistantError | None = None
         try:
-            async with map_ica_errors(self.hass, self._entry):
-                for uid in uids:
-                    await self._client.remove_item(uid)
+            for uid in uids:
+                try:
+                    async with map_ica_errors(self.hass, self._entry):
+                        await self._client.remove_item(uid)
+                except HomeAssistantError as err:
+                    if first_error is None:
+                        first_error = err
         finally:
             await self.coordinator.async_request_refresh()
+        if first_error is not None:
+            raise first_error

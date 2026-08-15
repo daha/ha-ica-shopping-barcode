@@ -98,8 +98,15 @@ class IcaClient:
         return ShoppingListItem.from_api(data)
 
     async def remove_item(self, item_id: str) -> None:
-        """Delete a row. The endpoint takes no body and returns no content."""
-        await self._request("DELETE", f"{SHOPPING_LIST_BASE}/row/{item_id}")
+        """Delete a row.
+
+        A 404 is treated as success: the row is already gone, which is the
+        end state the caller asked for (rows can vanish via the ICA app
+        between our poll and this call).
+        """
+        await self._request(
+            "DELETE", f"{SHOPPING_LIST_BASE}/row/{item_id}", allow_404=True
+        )
 
     async def _request(
         self,
@@ -138,6 +145,14 @@ class IcaClient:
                     raise IcaError(f"ICA API error {resp.status}: {text}")
                 if resp.status == 204:
                     return None
-                return await resp.json()
+                body = await resp.read()
+                if not body:
+                    return None
+                try:
+                    return await resp.json()
+                except ValueError as err:
+                    raise IcaError(
+                        f"ICA API returned a non-JSON body for {method} {url}"
+                    ) from err
         except aiohttp.ClientError as err:
             raise IcaConnectionError(str(err)) from err

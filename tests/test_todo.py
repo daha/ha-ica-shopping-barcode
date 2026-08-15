@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from custom_components.ica.api.auth import IcaToken
-from custom_components.ica.api.exceptions import IcaError
+from custom_components.ica.api.exceptions import IcaAuthError, IcaError
 from custom_components.ica.api.models import ShoppingList, ShoppingListItem
 from custom_components.ica.const import (
     CONF_LIST_ID,
@@ -154,6 +154,30 @@ async def test_rename_item(hass: HomeAssistant) -> None:
     assert kwargs["is_checked"] is True  # a rename must not uncheck the row
 
 
+async def test_add_item_auth_error_starts_reauth(hass: HomeAssistant) -> None:
+    # This is the whole justification for extracting errors.py: any ICA
+    # write that hits a 401 must kick off HA's reauth flow.
+    entity_id = await _setup(hass, [ShoppingListItem("R1", "Mjölk", False)])
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.add_item",
+            AsyncMock(side_effect=IcaAuthError("401")),
+        ),
+        patch.object(entry, "async_start_reauth", MagicMock()) as start_reauth,
+        patch(REFRESH, AsyncMock()),
+        pytest.raises(HomeAssistantError),
+    ):
+        await hass.services.async_call(
+            "todo",
+            "add_item",
+            {"item": "Ost"},
+            target={"entity_id": entity_id},
+            blocking=True,
+        )
+    start_reauth.assert_called_once()
+
+
 async def test_remove_item(hass: HomeAssistant) -> None:
     entity_id = await _setup(hass, [ShoppingListItem("R1", "Mjölk", False)])
     with (
@@ -174,12 +198,13 @@ async def test_remove_item(hass: HomeAssistant) -> None:
 
 
 async def test_delete_multiple_items(hass: HomeAssistant) -> None:
-    # The "remove completed items" card action sends several uids at once.
+    # The "remove completed items" card action sends several uids at once —
+    # i.e. CHECKED rows, so that's what this test represents.
     entity_id = await _setup(
         hass,
         [
-            ShoppingListItem("R1", "Mjölk", False),
-            ShoppingListItem("R2", "Bröd", False),
+            ShoppingListItem("R1", "Mjölk", True),
+            ShoppingListItem("R2", "Bröd", True),
         ],
     )
     entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
@@ -196,13 +221,16 @@ async def test_delete_multiple_items(hass: HomeAssistant) -> None:
 
 
 async def test_delete_partial_failure_still_refreshes(hass: HomeAssistant) -> None:
-    # A mid-loop failure must not hide the deletes that DID succeed until the
-    # next poll: the refresh has to run in a `finally`, not after the loop.
+    # A failure on the FIRST uid must not abort the rest of the batch: every
+    # uid has to be attempted, and the refresh has to run in a `finally`, not
+    # after the loop. CHECKED rows, matching the real "remove completed
+    # items" card action.
     entity_id = await _setup(
         hass,
         [
-            ShoppingListItem("R1", "Mjölk", False),
-            ShoppingListItem("R2", "Bröd", False),
+            ShoppingListItem("R1", "Mjölk", True),
+            ShoppingListItem("R2", "Bröd", True),
+            ShoppingListItem("R3", "Ost", True),
         ],
     )
     entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
@@ -210,11 +238,12 @@ async def test_delete_partial_failure_still_refreshes(hass: HomeAssistant) -> No
     with (
         patch(
             "custom_components.ica.api.client.IcaClient.remove_item",
-            AsyncMock(side_effect=[None, IcaError("boom")]),
+            AsyncMock(side_effect=[IcaError("boom"), None, None]),
         ) as remove,
         patch(REFRESH, AsyncMock()) as refresh,
         pytest.raises(HomeAssistantError),
     ):
-        await entity.async_delete_todo_items(["R1", "R2"])
-    assert remove.await_args_list == [call("R1"), call("R2")]
+        await entity.async_delete_todo_items(["R1", "R2", "R3"])
+    # All three uids were attempted, not just the one that failed.
+    assert remove.await_args_list == [call("R1"), call("R2"), call("R3")]
     refresh.assert_awaited_once()

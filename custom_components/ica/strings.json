@@ -65,6 +65,9 @@
     },
     "gateway_blocked": {
       "message": "ICA is blocking requests from this network."
+    },
+    "item_not_found": {
+      "message": "That item is no longer on the ICA shopping list."
     }
   },
   "services": {
