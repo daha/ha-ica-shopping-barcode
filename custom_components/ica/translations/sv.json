@@ -30,7 +30,8 @@
     },
     "abort": {
       "already_configured": "Den här inköpslistan är redan konfigurerad.",
-      "reauth_successful": "Återautentiseringen lyckades."
+      "reauth_successful": "Återautentiseringen lyckades.",
+      "unknown": "Ett oväntat fel uppstod. Försök igen."
     }
   },
   "options": {

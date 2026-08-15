@@ -9,6 +9,7 @@ import aiohttp
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.config_entries import (
+    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -90,7 +91,8 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
-            assert self._token is not None
+            if self._token is None:  # pragma: no cover - defensive
+                return self.async_abort(reason="unknown")
             list_id = user_input[CONF_LIST_ID]
             await self.async_set_unique_id(list_id)
             self._abort_if_unique_id_configured()
@@ -130,7 +132,7 @@ class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: Any) -> IcaOptionsFlow:
+    def async_get_options_flow(config_entry: ConfigEntry) -> IcaOptionsFlow:
         return IcaOptionsFlow()
 
 
