@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
+import pytest
 from custom_components.ica.api.auth import IcaToken
+from custom_components.ica.api.exceptions import IcaError
 from custom_components.ica.api.models import ShoppingList, ShoppingListItem
 from custom_components.ica.const import (
     CONF_LIST_ID,
@@ -13,7 +15,9 @@ from custom_components.ica.const import (
     CONF_TOKEN,
     DOMAIN,
 )
+from homeassistant.components.todo.const import DATA_COMPONENT
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 REFRESH = (
@@ -130,7 +134,8 @@ async def test_check_off_item_preserves_the_rest_of_the_row(
 
 
 async def test_rename_item(hass: HomeAssistant) -> None:
-    entity_id = await _setup(hass, [ShoppingListItem("R1", "mjolk", False)])
+    # Checked row: a plain rename must not silently uncheck it.
+    entity_id = await _setup(hass, [ShoppingListItem("R1", "mjolk", True)])
     with (
         patch(
             "custom_components.ica.api.client.IcaClient.update_item", AsyncMock()
@@ -146,6 +151,7 @@ async def test_rename_item(hass: HomeAssistant) -> None:
         )
     _, kwargs = update.await_args
     assert kwargs["text"] == "Mjölk"
+    assert kwargs["is_checked"] is True  # a rename must not uncheck the row
 
 
 async def test_remove_item(hass: HomeAssistant) -> None:
@@ -164,4 +170,51 @@ async def test_remove_item(hass: HomeAssistant) -> None:
             blocking=True,
         )
     remove.assert_awaited_once_with("R1")
+    refresh.assert_awaited_once()
+
+
+async def test_delete_multiple_items(hass: HomeAssistant) -> None:
+    # The "remove completed items" card action sends several uids at once.
+    entity_id = await _setup(
+        hass,
+        [
+            ShoppingListItem("R1", "Mjölk", False),
+            ShoppingListItem("R2", "Bröd", False),
+        ],
+    )
+    entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
+    assert entity is not None
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.remove_item", AsyncMock()
+        ) as remove,
+        patch(REFRESH, AsyncMock()) as refresh,
+    ):
+        await entity.async_delete_todo_items(["R1", "R2"])
+    assert remove.await_args_list == [call("R1"), call("R2")]
+    refresh.assert_awaited_once()
+
+
+async def test_delete_partial_failure_still_refreshes(hass: HomeAssistant) -> None:
+    # A mid-loop failure must not hide the deletes that DID succeed until the
+    # next poll: the refresh has to run in a `finally`, not after the loop.
+    entity_id = await _setup(
+        hass,
+        [
+            ShoppingListItem("R1", "Mjölk", False),
+            ShoppingListItem("R2", "Bröd", False),
+        ],
+    )
+    entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
+    assert entity is not None
+    with (
+        patch(
+            "custom_components.ica.api.client.IcaClient.remove_item",
+            AsyncMock(side_effect=[None, IcaError("boom")]),
+        ) as remove,
+        patch(REFRESH, AsyncMock()) as refresh,
+        pytest.raises(HomeAssistantError),
+    ):
+        await entity.async_delete_todo_items(["R1", "R2"])
+    assert remove.await_args_list == [call("R1"), call("R2")]
     refresh.assert_awaited_once()

@@ -72,6 +72,13 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
 
         The row carries the full payload the update endpoint needs, so edits
         must go through it rather than through a reconstructed item.
+
+        This row comes from the coordinator's cached snapshot, not a fresh
+        fetch: an edit PUTs back whatever the last poll saw, so it can revert
+        changes made in the ICA app since then. Accepted deliberately -
+        fetching fresh on every card edit would make the card sluggish.
+        Contrast with `services.py::_resolve_list`, which always reads fresh
+        because a barcode scan has no display to show stale state on.
         """
         data = self.coordinator.data
         for row in data.items if data is not None else []:
@@ -92,13 +99,23 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
             await self._client.update_item(
                 row,
                 text=item.summary,
-                is_checked=item.status == TodoItemStatus.COMPLETED,
+                is_checked=(
+                    None
+                    if item.status is None
+                    else item.status == TodoItemStatus.COMPLETED
+                ),
             )
         await self.coordinator.async_request_refresh()
 
     async def async_delete_todo_items(self, uids: list[str]) -> None:
-        """Delete items (the card's 'remove completed items' sends several)."""
-        async with map_ica_errors(self.hass, self._entry):
-            for uid in uids:
-                await self._client.remove_item(uid)
-        await self.coordinator.async_request_refresh()
+        """Delete items (the card's 'remove completed items' sends several).
+
+        The refresh runs in `finally` so a mid-loop failure still surfaces the
+        deletes that DID succeed, instead of hiding them until the next poll.
+        """
+        try:
+            async with map_ica_errors(self.hass, self._entry):
+                for uid in uids:
+                    await self._client.remove_item(uid)
+        finally:
+            await self.coordinator.async_request_refresh()
