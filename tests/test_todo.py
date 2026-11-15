@@ -128,10 +128,11 @@ async def test_check_off_item_preserves_the_rest_of_the_row(
 ) -> None:
     row = ShoppingListItem.from_api(
         {
-            "id": "R1",
-            "text": "Mjölk",
-            "isStriked": False,
-            "article": {"id": 11103, "group": {"id": 10}},
+            "offlineId": "R1",
+            "productName": "Mjölk",
+            "isStrikedOver": False,
+            "articleGroupId": 10,
+            "internalOrder": 3,
         }
     )
     entity_id = await _setup(hass, [row])
@@ -149,9 +150,11 @@ async def test_check_off_item_preserves_the_rest_of_the_row(
             blocking=True,
         )
     args, kwargs = update.await_args
-    assert args[0].id == "R1"
+    assert args[0] == "G1"
+    assert args[1].id == "R1"
     # The client is handed the ROW, so the untouched fields ride along.
-    assert args[0].raw["article"] == {"id": 11103, "group": {"id": 10}}
+    assert args[1].raw["articleGroupId"] == 10
+    assert args[1].raw["internalOrder"] == 3
     assert kwargs["is_checked"] is True
     refresh.assert_awaited_once()
 
@@ -216,7 +219,7 @@ async def test_remove_item(hass: HomeAssistant) -> None:
             target={"entity_id": entity_id},
             blocking=True,
         )
-    remove.assert_awaited_once_with("R1")
+    remove.assert_awaited_once_with("G1", "R1")
     refresh.assert_awaited_once()
 
 
@@ -245,7 +248,7 @@ async def test_delete_multiple_items(hass: HomeAssistant) -> None:
             target={"entity_id": entity_id},
             blocking=True,
         )
-    assert remove.await_args_list == [call("R1"), call("R2")]
+    assert remove.await_args_list == [call("G1", "R1"), call("G1", "R2")]
     refresh.assert_awaited_once()
 
 
@@ -274,7 +277,11 @@ async def test_delete_partial_failure_still_refreshes(hass: HomeAssistant) -> No
     ):
         await entity.async_delete_todo_items(["R1", "R2", "R3"])
     # All three uids were attempted, not just the one that failed.
-    assert remove.await_args_list == [call("R1"), call("R2"), call("R3")]
+    assert remove.await_args_list == [
+        call("G1", "R1"),
+        call("G1", "R2"),
+        call("G1", "R3"),
+    ]
     refresh.assert_awaited_once()
 
 

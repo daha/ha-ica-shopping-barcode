@@ -46,51 +46,33 @@ def test_product_from_api_search_shape() -> None:
     assert product.ean == "7310865000293"
 
 
-def test_product_to_row_article_passes_everything_through() -> None:
-    # Every field from the lookup must survive — incl. store-format categories.
-    raw = {
-        "id": 11103,
-        "name": "mjölk",
-        "productEan": "7310865000293",
+def test_product_to_row_fields_carries_the_article_groups() -> None:
+    product = Product("mjölk", "7310865000293", 11103, 10, 32)
+    assert product.to_row_fields() == {
         "articleGroupId": 10,
-        "expandedArticleGroupId": 10,
-        "articleGroupName": "Mejeri",
-        "maxiFormatCategoryId": "2510",
-        "naraFormatCategoryName": "Mejeri/juice",
+        "articleGroupIdExtended": 32,
     }
-    article = Product.from_api(raw).to_row_article()
-    assert article["id"] == 11103
-    assert article["articleGroupId"] == 10
-    assert article["productEan"] == "7310865000293"
-    # Store-format category fields are preserved, not dropped.
-    assert article["maxiFormatCategoryId"] == "2510"
-    assert article["naraFormatCategoryName"] == "Mejeri/juice"
 
 
-def test_product_to_row_article_ensures_keys_when_raw_sparse() -> None:
-    # Convenience-built Product (empty raw) still yields the required keys.
-    product = Product("mjölk", "7310865000293", 11103, 10, 10)
-    article = product.to_row_article()
-    assert article["id"] == 11103
-    assert article["productEan"] == "7310865000293"
-    assert article["articleGroupId"] == 10
-    assert article["expandedArticleGroupId"] == 10
+def test_product_to_row_fields_omits_keys_without_values() -> None:
+    # A Product with no group ids yields no fields (not nulls).
+    assert Product("okänt", None, None, None, None).to_row_fields() == {}
 
 
 def test_shopping_list_item_from_api() -> None:
-    # Row shape as returned by GET .../list/all (names come back null).
+    # Row shape as returned by GET .../shoppinglists.
     item = ShoppingListItem.from_api(
         {
-            "id": "9e93e3cc-76c5-43f3-a31f-43e2e1754002",
-            "text": "mjölk",
-            "isStriked": True,
-            "article": {
-                "id": 11103,
-                "name": None,
-                "ean": None,
-                "group": {"id": 10, "name": None},
-                "extendedGroup": {"id": 10, "name": None},
-            },
+            "id": 1030857476,
+            "offlineId": "9e93e3cc-76c5-43f3-a31f-43e2e1754002",
+            "productName": "mjölk",
+            "isStrikedOver": True,
+            "sourceId": -1,
+            "internalOrder": 1,
+            "articleGroupId": 10,
+            "articleGroupIdExtended": 10,
+            "recipes": [],
+            "latestChange": "2026-10-30T18:00:00Z",
         }
     )
     assert item.id == "9e93e3cc-76c5-43f3-a31f-43e2e1754002"
@@ -100,9 +82,8 @@ def test_shopping_list_item_from_api() -> None:
 
 
 def test_shopping_list_item_from_api_free_text() -> None:
-    # A free-text row may still carry a server-assigned article/group.
     item = ShoppingListItem.from_api(
-        {"id": "R1", "text": "Ketchup Heinz", "isStriked": False, "article": None}
+        {"offlineId": "R1", "productName": "Ketchup Heinz", "isStrikedOver": False}
     )
     assert item.text == "Ketchup Heinz"
     assert item.is_checked is False
@@ -112,32 +93,34 @@ def test_shopping_list_item_from_api_free_text() -> None:
 def test_shopping_list_from_api_with_rows() -> None:
     lst = ShoppingList.from_api(
         {
-            "id": "e47ebb35-e5a9-42f2-9e37-8348dceecca4",
-            "name": "Att handla",
+            "id": 4711,
+            "offlineId": "e47ebb35-e5a9-42f2-9e37-8348dceecca4",
+            "title": "Att handla",
+            "commentText": "",
             "rows": [
-                {"id": "R1", "text": "banan", "isStriked": False},
-                {"id": "R2", "text": "mjölk", "isStriked": True},
+                {"offlineId": "R1", "productName": "banan", "isStrikedOver": False},
+                {"offlineId": "R2", "productName": "mjölk", "isStrikedOver": True},
             ],
         }
     )
     assert lst.id == "e47ebb35-e5a9-42f2-9e37-8348dceecca4"
+    assert lst.server_id == "4711"
     assert lst.name == "Att handla"
     assert [i.text for i in lst.items] == ["banan", "mjölk"]
     assert lst.items[1].is_checked is True
 
 
-def test_product_to_row_article_omits_keys_without_values() -> None:
-    # A Product with no ids yields an article that omits those keys (not null).
-    article = Product("okänt", None, None, None, None).to_row_article()
-    assert "id" not in article
-    assert "productEan" not in article
-    assert "articleGroupId" not in article
-    assert "expandedArticleGroupId" not in article
-
-
 def test_shopping_list_from_api_without_rows() -> None:
-    lst = ShoppingList.from_api({"id": "G1", "name": "Tom"})
+    lst = ShoppingList.from_api({"offlineId": "G1", "title": "Tom"})
     assert lst.items == []
+    assert lst.server_id is None
+
+
+def test_shopping_list_matches_offline_id_or_server_id() -> None:
+    lst = ShoppingList(id="OFF1", name="A", server_id="4711")
+    assert lst.matches_id("OFF1") is True
+    assert lst.matches_id("4711") is True
+    assert lst.matches_id("OTHER") is False
 
 
 def test_has_active_item_ignores_checked_rows() -> None:
@@ -168,66 +151,66 @@ def test_product_from_api_missing_name_raises_ica_error() -> None:
 
 def test_shopping_list_item_from_api_missing_text_raises_ica_error() -> None:
     with pytest.raises(IcaError):
-        ShoppingListItem.from_api({"id": "R1", "isStriked": False})
+        ShoppingListItem.from_api({"offlineId": "R1", "isStrikedOver": False})
 
 
 def test_shopping_list_from_api_missing_id_raises_ica_error() -> None:
     with pytest.raises(IcaError):
-        ShoppingList.from_api({"name": "Tom"})
+        ShoppingList.from_api({"id": 1, "title": "Tom"})
 
 
 def test_shopping_list_item_keeps_raw_row() -> None:
     row = {
-        "id": "R1",
-        "text": "mjölk",
-        "isStriked": False,
-        "order": -184,
-        "quantity": None,
-        "article": {"id": 11103, "group": {"id": 10}, "extendedGroup": {"id": 10}},
-        "shoppingListRowId": 1030857476,
-        "ingredientGroup": 1000,
+        "id": 1030857476,
+        "offlineId": "R1",
+        "productName": "mjölk",
+        "isStrikedOver": False,
+        "sourceId": -1,
+        "internalOrder": 4,
+        "articleGroupId": 10,
+        "articleGroupIdExtended": 10,
+        "recipes": [],
     }
     item = ShoppingListItem.from_api(row)
     assert item.raw == row
 
 
 def test_to_updated_row_flips_checked_and_keeps_everything_else() -> None:
-    # ICA replaces the WHOLE row, so every field we received must go back —
-    # dropping `article` here would destroy the item's category.
+    # A changed row is sent back WHOLE, so every field we received must go
+    # back — dropping the article group would destroy the item's category.
     row = {
-        "id": "R1",
-        "text": "mjölk",
-        "isStriked": False,
-        "order": -184,
-        "article": {"id": 11103, "group": {"id": 10}},
-        "shoppingListRowId": 1030857476,
+        "id": 1030857476,
+        "offlineId": "R1",
+        "productName": "mjölk",
+        "isStrikedOver": False,
+        "internalOrder": 4,
+        "articleGroupId": 10,
     }
     updated = ShoppingListItem.from_api(row).to_updated_row(is_checked=True)
-    assert updated["isStriked"] is True
-    assert updated["text"] == "mjölk"
-    assert updated["article"] == {"id": 11103, "group": {"id": 10}}
-    assert updated["order"] == -184
-    assert updated["shoppingListRowId"] == 1030857476
+    assert updated["isStrikedOver"] is True
+    assert updated["productName"] == "mjölk"
+    assert updated["articleGroupId"] == 10
+    assert updated["internalOrder"] == 4
+    assert updated["id"] == 1030857476
 
 
 def test_to_updated_row_renames_without_touching_status() -> None:
-    row = {"id": "R1", "text": "mjolk", "isStriked": True, "article": {"id": 1}}
+    row = {"offlineId": "R1", "productName": "mjolk", "isStrikedOver": True}
     updated = ShoppingListItem.from_api(row).to_updated_row(text="Mjölk")
-    assert updated["text"] == "Mjölk"
-    assert updated["isStriked"] is True  # unchanged
-    assert updated["article"] == {"id": 1}
+    assert updated["productName"] == "Mjölk"
+    assert updated["isStrikedOver"] is True  # unchanged
 
 
 def test_to_updated_row_defaults_to_current_values() -> None:
-    row = {"id": "R1", "text": "mjölk", "isStriked": True}
+    row = {"offlineId": "R1", "productName": "mjölk", "isStrikedOver": True}
     updated = ShoppingListItem.from_api(row).to_updated_row()
-    assert updated["text"] == "mjölk"
-    assert updated["isStriked"] is True
+    assert updated["productName"] == "mjölk"
+    assert updated["isStrikedOver"] is True
 
 
 def test_to_updated_row_ensures_id_when_raw_is_empty() -> None:
     # A hand-built item (no raw payload) must still produce a usable row.
     updated = ShoppingListItem("R9", "Bröd", False).to_updated_row(is_checked=True)
-    assert updated["id"] == "R9"
-    assert updated["text"] == "Bröd"
-    assert updated["isStriked"] is True
+    assert updated["offlineId"] == "R9"
+    assert updated["productName"] == "Bröd"
+    assert updated["isStrikedOver"] is True

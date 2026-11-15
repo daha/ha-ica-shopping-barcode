@@ -159,10 +159,9 @@ async def test_scan_barcode_attaches_article(hass: HomeAssistant) -> None:
             blocking=True,
             return_response=True,
         )
-    # The article (with its group ids) built from the EAN lookup is attached.
+    # The group ids from the EAN lookup are attached to the new row.
     _, kwargs = add.await_args
-    assert kwargs["article"]["articleGroupId"] == 10
-    assert kwargs["article"]["expandedArticleGroupId"] == 10
+    assert kwargs["fields"] == {"articleGroupId": 10, "articleGroupIdExtended": 10}
     assert resp == {
         "found": True,
         "added": True,
@@ -195,7 +194,7 @@ async def test_scan_barcode_miss_adds_raw_ean(hass: HomeAssistant) -> None:
             blocking=True,
             return_response=True,
         )
-    add.assert_awaited_once_with("G1", "Okänd vara 999", article=None)
+    add.assert_awaited_once_with("G1", "Okänd vara 999", fields=None)
     assert resp == {
         "found": False,
         "added": True,
@@ -240,7 +239,7 @@ async def test_add_item_readds_checked_off_item(hass: HomeAssistant) -> None:
         resp = await hass.services.async_call(
             DOMAIN, "add_item", {"name": "mjölk"}, blocking=True, return_response=True
         )
-    add.assert_awaited_once_with("G1", "mjölk", article=None)
+    add.assert_awaited_once_with("G1", "mjölk", fields=None)
     assert resp == {"added": True, "name": "mjölk"}
 
 
@@ -275,12 +274,12 @@ async def test_add_item_ignores_stale_cached_snapshot(hass: HomeAssistant) -> No
             blocking=True,
             return_response=True,
         )
-    add.assert_awaited_once_with("G1", "Mellanmjölk ICA", article=None)
+    add.assert_awaited_once_with("G1", "Mellanmjölk ICA", fields=None)
     assert resp == {"added": True, "name": "Mellanmjölk ICA"}
 
 
 async def test_add_item_named_list_fetches_lists_once(hass: HomeAssistant) -> None:
-    # S9: resolving a named list must fetch `list/all` exactly once, and must
+    # S9: resolving a named list must fetch the lists exactly once, and must
     # NOT fall back to the old double round-trip through `get_list`.
     await _setup(hass, [])
     other_list = ShoppingList(id="G2", name="Fest", items=[])
@@ -305,7 +304,7 @@ async def test_add_item_named_list_fetches_lists_once(hass: HomeAssistant) -> No
         )
     get_lists.assert_awaited_once()
     get_list.assert_not_called()
-    add.assert_awaited_once_with("G2", "Ballonger", article=None)
+    add.assert_awaited_once_with("G2", "Ballonger", fields=None)
     assert resp == {"added": True, "name": "Ballonger"}
 
 

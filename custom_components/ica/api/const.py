@@ -21,12 +21,15 @@ USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"
 )
 
-# Web shopping-list service (ica.se) — the API our account actually uses.
-#   list all:   GET    {SHOPPING_LIST_BASE}/list/all
-#   add row:    POST   {SHOPPING_LIST_BASE}/list/{list_id}/row
-#   update row: PUT    {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: check; full row)
-#   delete row: DELETE {SHOPPING_LIST_BASE}/row/{row_id}  (Phase 2: no body)
-SHOPPING_LIST_BASE = f"{API_BASE}/sverige/digx/shopping-list/v1/api"
+# Mobile shopping-list service — the one the ICA app uses. (The web service at
+# /sverige/digx/shopping-list/v1/api was shut down on 2026-10-26 and now 404s.)
+#   list all: GET  {SHOPPING_LIST_BASE}/shoppinglists
+#             -> {"shoppingLists": [{"offlineId", "title", "rows": [...]}, ...]}
+#   write:    POST {SHOPPING_LIST_BASE}/shoppinglists/{list offlineId}/sync
+#             body {"changedShoppingListProperties": {}, "createdRows": [...],
+#                   "changedRows": [...], "deletedRows": ["<row offlineId>"]}
+# Lists and rows are addressed by their client-generated `offlineId`.
+SHOPPING_LIST_BASE = f"{API_BASE}/sverige/digx/mobile/shoppinglistservice/v1"
 # Product service (EAN/GTIN lookup) — GET {PRODUCT_URL}/{ean}.
 # Returns name + articleId + articleGroupId + expandedArticleGroupId, i.e.
 # everything needed to categorise the row; no separate article-search is needed.
@@ -36,6 +39,5 @@ PRODUCT_URL = f"{API_BASE}/sverige/digx/mobile/productservice/v1/product"
 # 10 COARSE groups only (expanded group ids are not in this table). Static data
 # (rows stamped 2015), so it is fetched once per session and cached.
 ARTICLE_GROUPS_URL = (
-    f"{API_BASE}/sverige/digx/mobile/shoppinglistservice/v1"
-    "/articles/articlegroups?lastsyncdate=2001-01-01"
+    f"{SHOPPING_LIST_BASE}/articles/articlegroups?lastsyncdate=2001-01-01"
 )

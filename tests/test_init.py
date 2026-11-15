@@ -104,3 +104,39 @@ async def test_coordinator_gateway_blocked_and_recovery(hass: HomeAssistant) -> 
         await coordinator.async_refresh()
 
     assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_GATEWAY_BLOCKED) is None
+
+
+async def test_stale_web_list_id_is_migrated(hass: HomeAssistant) -> None:
+    # Entries configured against the retired web API store an id the mobile
+    # API may not know. The list is found by its stored title, and the entry
+    # is updated so every later call addresses the list by its offlineId.
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    lst = ShoppingList(id="OFF1", name="Inköpslista", items=[])
+    get_list = AsyncMock(return_value=lst)
+    with patch("custom_components.ica.IcaClient.get_list", get_list):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    get_list.assert_awaited_once_with("G1", name="Inköpslista")
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_LIST_ID] == "OFF1"
+    assert entry.runtime_data.coordinator.list_id == "OFF1"
+
+    with patch("custom_components.ica.IcaClient.get_list", get_list):
+        await entry.runtime_data.coordinator.async_refresh()
+    assert get_list.await_args.args == ("OFF1",)
+
+
+async def test_matching_list_id_leaves_entry_untouched(hass: HomeAssistant) -> None:
+    entry = _entry()
+    entry.add_to_hass(hass)
+    original = dict(entry.data)
+
+    lst = ShoppingList(id="G1", name="Inköpslista", items=[])
+    with patch("custom_components.ica.IcaClient.get_list", AsyncMock(return_value=lst)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert dict(entry.data) == original
