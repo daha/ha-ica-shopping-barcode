@@ -57,7 +57,7 @@ def _get_entry(hass: HomeAssistant) -> IcaConfigEntry:
 
 
 async def _resolve_list(runtime: IcaRuntimeData, list_name: str | None) -> ShoppingList:
-    """Return the target list, ALWAYS freshly fetched (one `list/all` call).
+    """Return the target list, ALWAYS freshly fetched (one list read).
 
     Dedupe must never be decided from the coordinator's cached snapshot: it can
     be up to `scan_interval` minutes old, so an item checked off or deleted in
@@ -68,7 +68,7 @@ async def _resolve_list(runtime: IcaRuntimeData, list_name: str | None) -> Shopp
     if list_name is None:
         list_id = runtime.coordinator.list_id
         for lst in lists:
-            if lst.id == list_id:
+            if lst.matches_id(list_id):
                 return lst
         raise HomeAssistantError(
             translation_domain=DOMAIN, translation_key="list_not_found"
@@ -102,7 +102,7 @@ async def _add_deduped(
     runtime: IcaRuntimeData,
     target: ShoppingList,
     name: str,
-    article: dict[str, Any] | None = None,
+    fields: dict[str, Any] | None = None,
 ) -> bool:
     """Add an item unless an UNCHECKED case-insensitive name match exists.
 
@@ -110,7 +110,7 @@ async def _add_deduped(
     """
     if target.has_active_item(name):
         return False
-    await runtime.client.add_item(target.id, name, article=article)
+    await runtime.client.add_item(target.id, name, fields=fields)
     if target.id == runtime.coordinator.list_id:
         await runtime.coordinator.async_request_refresh()
     return True
@@ -151,14 +151,14 @@ def async_setup_services(hass: HomeAssistant) -> None:
             if product is not None:
                 name = product.name
                 found = True
-                # The EAN lookup already carries the article group ids, so build
-                # the article inline — ICA files the row in the right category.
-                article = product.to_row_article()
+                # The EAN lookup already carries the article group ids, so pass
+                # them on the row — ICA files it in the right category.
+                fields = product.to_row_fields()
             else:
                 name = f"{UNKNOWN_ITEM_PREFIX} {ean}"
                 found = False
-                article = None
-            added = await _add_deduped(runtime, target, name, article=article)
+                fields = None
+            added = await _add_deduped(runtime, target, name, fields=fields)
             category = await _category_of(runtime, product)
         return {
             "found": found,

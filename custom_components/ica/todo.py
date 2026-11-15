@@ -74,7 +74,7 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
         must go through it rather than through a reconstructed item.
 
         This row comes from the coordinator's cached snapshot, not a fresh
-        fetch: an edit PUTs back whatever the last poll saw, so it can revert
+        fetch: an edit sends back whatever the last poll saw, so it can revert
         changes made in the ICA app since then. Accepted deliberately -
         fetching fresh on every card edit would make the card sluggish.
         Contrast with `services.py::_resolve_list`, which always reads fresh
@@ -109,6 +109,7 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
             async with map_ica_errors(self.hass, self._entry):
                 row = self._row(item.uid or "")
                 await self._client.update_item(
+                    self.coordinator.list_id,
                     row,
                     text=item.summary,
                     is_checked=(
@@ -133,7 +134,7 @@ class IcaTodoListEntity(CoordinatorEntity[IcaDataUpdateCoordinator], TodoListEnt
             for uid in uids:
                 try:
                     async with map_ica_errors(self.hass, self._entry):
-                        await self._client.remove_item(uid)
+                        await self._client.remove_item(self.coordinator.list_id, uid)
                 except HomeAssistantError as err:
                     if first_error is None:
                         first_error = err

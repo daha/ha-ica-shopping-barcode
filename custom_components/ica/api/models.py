@@ -1,4 +1,4 @@
-"""Typed models for the ICA web shopping-list API (no Home Assistant imports)."""
+"""Typed models for the ICA mobile shopping-list API (no Home Assistant imports)."""
 
 from __future__ import annotations
 
@@ -52,36 +52,30 @@ class Product:
             raw=dict(data),
         )
 
-    def to_row_article(self) -> dict[str, Any]:
-        """Return the full `article` object for an add-row request.
+    def to_row_fields(self) -> dict[str, Any]:
+        """Return the category fields for a new shopping-list row.
 
-        Passes through EVERY field from the lookup (store-format categories,
-        group names, etc.) and ensures the keys the add endpoint needs
-        (`id`, `productEan`, `articleGroupId`, `expandedArticleGroupId`) are
-        present whenever we have a value for them — never overriding what the
-        payload already carries.
+        The mobile shopping-list API files a row under its article group, so a
+        scanned product lands in the right section of the list. Keys without a
+        value are omitted.
         """
-        article = dict(self.raw)
-        if self.article_id is not None:
-            article.setdefault("id", self.article_id)
-        if self.ean is not None:
-            article.setdefault("productEan", self.ean)
+        fields: dict[str, Any] = {}
         if self.article_group_id is not None:
-            article.setdefault("articleGroupId", self.article_group_id)
+            fields["articleGroupId"] = self.article_group_id
         if self.extended_article_group_id is not None:
-            article.setdefault("expandedArticleGroupId", self.extended_article_group_id)
-        return article
+            fields["articleGroupIdExtended"] = self.extended_article_group_id
+        return fields
 
 
 @dataclass(slots=True)
 class ShoppingListItem:
-    """A single row on an ICA shopping list (web dialect).
+    """A single row on an ICA shopping list (mobile dialect).
 
-    Keeps the FULL raw row: ICA's update endpoint REPLACES the row, so an edit
-    has to send every field back (see `to_updated_row`).
+    Keeps the FULL raw row: a changed row is sent back to the sync endpoint in
+    its entirety, so an edit has to carry every field (see `to_updated_row`).
     """
 
-    id: str  # row GUID
+    id: str  # row offlineId (client-generated UUID)
     text: str
     is_checked: bool
     article_group_id: int | None = None
@@ -89,13 +83,11 @@ class ShoppingListItem:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> ShoppingListItem:
-        article = data.get("article") or {}
-        group = article.get("group") or {}
         return cls(
-            id=_required(data, "id"),
-            text=_required(data, "text"),
-            is_checked=bool(data.get("isStriked", False)),
-            article_group_id=group.get("id"),
+            id=_required(data, "offlineId"),
+            text=_required(data, "productName"),
+            is_checked=bool(data.get("isStrikedOver", False)),
+            article_group_id=data.get("articleGroupId"),
             raw=dict(data),
         )
 
@@ -105,37 +97,47 @@ class ShoppingListItem:
         """Return the full row with ONLY the given fields changed.
 
         Everything else from the original payload passes through untouched, so
-        `article` (the item's category), `order`, `quantity`, `created` and the
-        rest survive an edit. Omitted arguments keep the current value.
+        the article group (the item's category), `internalOrder`, `sourceId`,
+        `recipes` and the rest survive an edit. Omitted arguments keep the
+        current value.
 
-        The returned dict is a SHALLOW copy: nested values (`article`,
-        `quantity`) are shared with this item's cached payload, so treat the
-        result as read-only. Mutating them in place would corrupt the
-        coordinator's snapshot until the next poll.
+        The returned dict is a SHALLOW copy: nested values (`recipes`) are
+        shared with this item's cached payload, so treat the result as
+        read-only. Mutating them in place would corrupt the coordinator's
+        snapshot until the next poll.
         """
         row = dict(self.raw)
-        row.setdefault("id", self.id)
-        row["text"] = self.text if text is None else text
-        row["isStriked"] = self.is_checked if is_checked is None else is_checked
+        row.setdefault("offlineId", self.id)
+        row["productName"] = self.text if text is None else text
+        row["isStrikedOver"] = self.is_checked if is_checked is None else is_checked
         return row
 
 
 @dataclass(slots=True)
 class ShoppingList:
-    """An ICA shopping list with its rows (web dialect)."""
+    """An ICA shopping list with its rows (mobile dialect)."""
 
-    id: str  # list GUID
+    id: str  # list offlineId (client-generated UUID) — what the sync URL takes
     name: str
     items: list[ShoppingListItem] = field(default_factory=list)
+    # The server-side `id`. Only used to recognise a list configured before the
+    # move off the web API, whose stored id may be this rather than offlineId.
+    server_id: str | None = None
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> ShoppingList:
         rows = data.get("rows") or []
+        server_id = data.get("id")
         return cls(
-            id=_required(data, "id"),
-            name=data.get("name", ""),
+            id=_required(data, "offlineId"),
+            name=data.get("title") or "",
             items=[ShoppingListItem.from_api(row) for row in rows],
+            server_id=None if server_id is None else str(server_id),
         )
+
+    def matches_id(self, list_id: str) -> bool:
+        """True if `list_id` is this list's offlineId or its server id."""
+        return list_id in (self.id, self.server_id)
 
     def has_active_item(self, name: str) -> bool:
         """True if an UNCHECKED row matches name (case-insensitive)."""

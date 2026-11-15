@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import IcaClient, IcaError, ShoppingList
 from .api.exceptions import IcaAuthError, IcaGatewayBlockedError
-from .const import DOMAIN, ISSUE_GATEWAY_BLOCKED
+from .const import CONF_LIST_ID, CONF_LIST_TITLE, DOMAIN, ISSUE_GATEWAY_BLOCKED
 
 if TYPE_CHECKING:
     from . import IcaConfigEntry
@@ -39,12 +39,15 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
             name="ICA shopping list",
             update_interval=timedelta(minutes=interval_minutes),
         )
+        self._entry = config_entry
         self.client = client
         self.list_id = list_id
 
     async def _async_update_data(self) -> ShoppingList:
         try:
-            data = await self.client.get_list(self.list_id)
+            data = await self.client.get_list(
+                self.list_id, name=self._entry.data.get(CONF_LIST_TITLE)
+            )
         except IcaGatewayBlockedError as err:
             ir.async_create_issue(
                 self.hass,
@@ -61,4 +64,25 @@ class IcaDataUpdateCoordinator(DataUpdateCoordinator[ShoppingList]):
         except IcaError as err:
             raise UpdateFailed(str(err)) from err
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_GATEWAY_BLOCKED)
+        if data.id != self.list_id:
+            self._migrate_list_id(data.id)
         return data
+
+    def _migrate_list_id(self, new_id: str) -> None:
+        """Store the list's current offlineId in place of a stale id.
+
+        Entries configured against the retired web shopping-list API hold an
+        id the mobile API may not know; `get_list` then finds the list by its
+        server id or name instead. Persisting the offlineId it resolved means
+        every later read and write addresses the list directly.
+        """
+        _LOGGER.info(
+            "ICA shopping list id changed from %s to %s; updating the entry",
+            self.list_id,
+            new_id,
+        )
+        self.list_id = new_id
+        entry = self._entry
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_LIST_ID: new_id}
+        )
